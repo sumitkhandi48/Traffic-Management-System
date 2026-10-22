@@ -1,0 +1,12 @@
+
+# Python generated files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE settings
+.vscode/
