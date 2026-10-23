@@ -1,8 +1,7 @@
 """FIFO queue implementation for an individual traffic lane."""
 
 from collections import deque
-from typing import Deque, Generic, TypeVar
-
+from typing import Deque, Generic, Iterator, TypeVar
 
 T = TypeVar("T")
 
@@ -35,6 +34,10 @@ class LaneQueue(Generic[T]):
     def size(self) -> int:
         """Return the number of vehicles waiting in the lane."""
         return len(self._vehicles)
+
+    def __iter__(self) -> Iterator[T]:
+        """Iterate over queued vehicles without removing them."""
+        return iter(tuple(self._vehicles))
 
     def is_empty(self) -> bool:
         """Return whether the lane queue contains no vehicles."""
