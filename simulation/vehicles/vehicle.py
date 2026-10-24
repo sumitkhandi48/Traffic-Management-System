@@ -22,7 +22,12 @@ class Vehicle:
         if self.waiting_time < 0:
             raise ValueError("waiting_time cannot be negative")
 
-        if self.vehicle_type not in {"normal", "emergency"}:
+        if (
+            not isinstance(self.vehicle_type, str)
+            or not self.vehicle_type.strip()
+        ):
             raise ValueError(
-                "vehicle_type must be 'normal' or 'emergency'"
+                "vehicle_type must be a non-empty string"
             )
+
+        self.vehicle_type = self.vehicle_type.strip().lower()

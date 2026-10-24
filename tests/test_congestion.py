@@ -59,3 +59,24 @@ def test_non_numeric_demand_is_rejected():
     detector = CongestionDetector(10, 10)
     with pytest.raises(TypeError):
         detector.detect("high", 5)
+
+
+def test_custom_congestion_rule_requires_both_thresholds():
+    from simulation.congestion import BothThresholdsExceeded
+
+    detector = CongestionDetector(
+        demand_threshold=10,
+        queue_length_threshold=10,
+        rule=BothThresholdsExceeded(),
+    )
+
+    assert detector.detect(11, 5) is False
+    assert detector.detect(5, 11) is False
+    assert detector.detect(11, 11) is True
+
+
+def test_default_congestion_rule_preserves_existing_behavior():
+    detector = CongestionDetector(10, 10)
+
+    assert detector.detect(11, 5) is True
+    assert detector.detect(5, 11) is True
