@@ -109,3 +109,64 @@ def test_negative_waiting_time_weight_is_rejected():
 def test_invalid_queue_type_is_rejected():
     with pytest.raises(TypeError):
         DemandMonitor().measure({"North": [object()]})
+
+
+def test_identical_inputs_produce_identical_measurements():
+    queue = LaneQueue[Vehicle]()
+    queue.enqueue(Vehicle(vehicle_id=1, waiting_time=5))
+    queue.enqueue(Vehicle(vehicle_id=2, waiting_time=10))
+
+    monitor = DemandMonitor(waiting_time_weight=0.1)
+    approaches = {"North": [queue]}
+
+    first = monitor.measure(approaches)
+    second = monitor.measure(approaches)
+
+    assert first == second
+
+
+def test_measurement_is_consistent_across_approach_order():
+    north = LaneQueue[Vehicle]()
+    south = LaneQueue[Vehicle]()
+
+    north.enqueue(Vehicle(vehicle_id=1, waiting_time=5))
+    south.enqueue(Vehicle(vehicle_id=2, waiting_time=10))
+
+    monitor = DemandMonitor()
+
+    first = monitor.measure({
+        "North": [north],
+        "South": [south],
+    })
+    second = monitor.measure({
+        "South": [south],
+        "North": [north],
+    })
+
+    assert first == second
+
+
+def test_measurement_preserves_vehicle_order_and_queue_contents():
+    queue = LaneQueue[Vehicle]()
+    first_vehicle = Vehicle(vehicle_id=1, waiting_time=5)
+    second_vehicle = Vehicle(vehicle_id=2, waiting_time=10)
+
+    queue.enqueue(first_vehicle)
+    queue.enqueue(second_vehicle)
+
+    monitor = DemandMonitor()
+    monitor.measure({"North": [queue]})
+
+    assert queue.size() == 2
+    assert queue.peek() is first_vehicle
+    assert first_vehicle.waiting_time == 5
+    assert second_vehicle.waiting_time == 10
+
+
+def test_measurement_returns_zero_for_approach_with_no_lanes():
+    result = DemandMonitor().measure({"North": []})
+
+    assert result["North"].waiting_vehicle_count == 0
+    assert result["North"].total_waiting_time == 0
+    assert result["North"].demand_score == 0
+
