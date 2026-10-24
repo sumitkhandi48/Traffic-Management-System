@@ -1,3 +1,4 @@
+
 """Tests for dynamic vehicle arrivals and lane assignment."""
 
 import pytest
@@ -93,18 +94,39 @@ def test_rejects_negative_arrival_time(traffic_setup):
     assert south_lane_1.is_empty()
 
 
-def test_rejects_invalid_vehicle_type(traffic_setup):
+def test_supports_additional_vehicle_type(traffic_setup):
     generator, _, _, south_lane_1 = traffic_setup
 
-    with pytest.raises(ValueError, match="vehicle_type"):
-        generator.generate_vehicle(
-            "South",
-            vehicle_type="bus",
-        )
+    vehicle = generator.generate_vehicle(
+        "South",
+        vehicle_type="bus",
+    )
 
-    assert south_lane_1.is_empty()
+    assert vehicle.vehicle_type == "bus"
+    assert south_lane_1.peek() == vehicle
 
 
 def test_rejects_empty_approach_configuration():
     with pytest.raises(ValueError, match="at least one approach"):
         VehicleArrivalGenerator({})
+
+
+def test_supports_adding_an_additional_lane():
+    lane_1 = LaneQueue()
+    lane_2 = LaneQueue()
+    lane_3 = LaneQueue()
+
+    generator = VehicleArrivalGenerator(
+        approaches={"North": [lane_1, lane_2, lane_3]}
+    )
+
+    vehicle = generator.generate_vehicle(
+        approach="North",
+        vehicle_type="bus",
+        lane_index=2,
+    )
+
+    assert lane_1.is_empty()
+    assert lane_2.is_empty()
+    assert lane_3.peek() == vehicle
+    assert vehicle.vehicle_type == "bus"

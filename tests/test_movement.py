@@ -1,4 +1,4 @@
-
+from simulation.traffic.lane_queue import LaneQueue
 from collections import deque
 from enum import Enum
 
@@ -115,3 +115,42 @@ def test_string_green_signal_allows_movement():
 
     assert moved == ["V1"]
     assert queue.is_empty()
+
+def test_custom_signal_strategy_allows_movement():
+    from simulation.movement import move_vehicles
+
+    class AlwaysAllowStrategy:
+        def allows_movement(self, signal_state):
+            return True
+
+    queue = LaneQueue()
+    queue.enqueue("car")
+
+    moved = move_vehicles(
+        queue,
+        signal_state="RED",
+        strategy=AlwaysAllowStrategy(),
+    )
+
+    assert moved == ["car"]
+    assert queue.is_empty()
+
+
+def test_custom_signal_strategy_can_block_movement():
+    from simulation.movement import move_vehicles
+
+    class NeverAllowStrategy:
+        def allows_movement(self, signal_state):
+            return False
+
+    queue = LaneQueue()
+    queue.enqueue("car")
+
+    moved = move_vehicles(
+        queue,
+        signal_state="GREEN",
+        strategy=NeverAllowStrategy(),
+    )
+
+    assert moved == []
+    assert queue.size() == 1

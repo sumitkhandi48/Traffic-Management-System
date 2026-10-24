@@ -39,9 +39,24 @@ def test_negative_values_are_rejected(
         )
 
 
-def test_invalid_vehicle_type_is_rejected() -> None:
-    with pytest.raises(ValueError):
-        Vehicle(vehicle_id=1, vehicle_type="bus")
+
+def test_additional_vehicle_type_is_supported() -> None:
+    vehicle = Vehicle(vehicle_id=1, vehicle_type="bus")
+
+    assert vehicle.vehicle_type == "bus"
+    assert classify_vehicle(vehicle) == "bus"
+
+
+def test_vehicle_type_is_normalized() -> None:
+    vehicle = Vehicle(vehicle_id=2, vehicle_type="  BUS  ")
+
+    assert vehicle.vehicle_type == "bus"
+
+
+@pytest.mark.parametrize("vehicle_type", ["", "   ", None, 123])
+def test_invalid_vehicle_type_is_rejected(vehicle_type) -> None:
+    with pytest.raises(ValueError, match="vehicle_type"):
+        Vehicle(vehicle_id=1, vehicle_type=vehicle_type)
 
 
 def test_classification_rejects_non_vehicle_input() -> None:
