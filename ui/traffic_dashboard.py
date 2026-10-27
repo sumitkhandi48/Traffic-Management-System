@@ -18,35 +18,54 @@ class TrafficDashboard:
         self.root.minsize(850, 600)
 
         self.engine = SimulationEngine()
+
         self.signal_states = {
             approach: "RED" for approach in self.APPROACHES
         }
+
         self.vehicle_queues = {
             approach: [] for approach in self.APPROACHES
         }
+
         self.vehicle_waiting_times = {
             approach: {} for approach in self.APPROACHES
         }
+
         self.next_vehicle_id = 1
 
-        # Signal phases: North/South and East/West take turns. Phase duration
-        # is adjusted using the number of waiting vehicles.
+        # Adaptive traffic signal phase state.
         self._active_axis = "NS"
         self._phase_elapsed = 0.0
         self._movement_elapsed = 0.0
         self._phase_duration = 5.0
+
+        # Dashboard refresh interval in milliseconds.
         self._tick_interval = 100
+
         self._configure_styles()
         self._build_interface()
         self._refresh_display()
-        self.root.after(100, self._tick)
+
+        self.root.after(self._tick_interval, self._tick)
 
     def _configure_styles(self):
         style = ttk.Style()
-        style.configure("Title.TLabel", font=("Arial", 20, "bold"))
-        style.configure("Section.TLabel", font=("Arial", 12, "bold"))
-        style.configure("Status.TLabel", font=("Arial", 11, "bold"))
-        style.configure("Control.TButton", padding=8)
+        style.configure(
+            "Title.TLabel",
+            font=("Arial", 20, "bold"),
+        )
+        style.configure(
+            "Section.TLabel",
+            font=("Arial", 12, "bold"),
+        )
+        style.configure(
+            "Status.TLabel",
+            font=("Arial", 11, "bold"),
+        )
+        style.configure(
+            "Control.TButton",
+            padding=8,
+        )
 
     def _build_interface(self):
         main = ttk.Frame(self.root, padding=16)
@@ -76,7 +95,9 @@ class TrafficDashboard:
 
     def _build_controls(self, parent):
         controls = ttk.LabelFrame(
-            parent, text="Simulation Controls", padding=10
+            parent,
+            text="Simulation Controls",
+            padding=10,
         )
         controls.pack(fill=tk.X, pady=(0, 12))
 
@@ -96,19 +117,22 @@ class TrafficDashboard:
                 style="Control.TButton",
             ).pack(side=tk.LEFT, padx=3, pady=2)
 
-        # Vehicles can be placed on a chosen approach, or distributed
-        # across North, South, East, and West automatically for demos.
-        ttk.Label(controls, text="Approach:").pack(
-            side=tk.LEFT, padx=(10, 3)
-        )
+        # Allow manual selection or automatic round-robin selection.
+        ttk.Label(
+            controls,
+            text="Approach:",
+        ).pack(side=tk.LEFT, padx=(10, 3))
+
         self.approach_selector = ttk.Combobox(
             controls,
             values=("Auto (round-robin)", *self.APPROACHES),
             state="readonly",
             width=17,
         )
+
         self.approach_selector.current(0)
         self.approach_selector.pack(side=tk.LEFT, padx=3, pady=2)
+
         self._next_auto_approach = 0
 
         ttk.Button(
@@ -119,13 +143,16 @@ class TrafficDashboard:
         ).pack(side=tk.LEFT, padx=3, pady=2)
 
         self.time_label = ttk.Label(
-            controls, text="Simulation time: 0.0 s"
+            controls,
+            text="Simulation time: 0.0 s",
         )
         self.time_label.pack(side=tk.RIGHT, padx=8)
 
     def _build_intersection(self, parent):
         section = ttk.LabelFrame(
-            parent, text="Intersection Overview", padding=12
+            parent,
+            text="Intersection Overview",
+            padding=12,
         )
         section.pack(fill=tk.BOTH, expand=True, pady=(0, 12))
 
@@ -146,8 +173,11 @@ class TrafficDashboard:
 
         for approach, (row, column) in positions.items():
             card = ttk.LabelFrame(
-                section, text=f"{approach} Approach", padding=10
+                section,
+                text=f"{approach} Approach",
+                padding=10,
             )
+
             card.grid(
                 row=row,
                 column=column,
@@ -160,7 +190,8 @@ class TrafficDashboard:
             signal_row.pack(anchor=tk.W, fill=tk.X)
 
             ttk.Label(
-                signal_row, text="Signal:"
+                signal_row,
+                text="Signal:",
             ).pack(side=tk.LEFT)
 
             signal = tk.Label(
@@ -172,17 +203,21 @@ class TrafficDashboard:
                 padx=6,
                 pady=3,
             )
+
             signal.pack(side=tk.LEFT, padx=8)
             self.signal_labels[approach] = signal
 
             queue = ttk.Label(
-                card, text="Waiting vehicles: 0"
+                card,
+                text="Waiting vehicles: 0",
             )
             queue.pack(anchor=tk.W, pady=(10, 4))
+
             self.queue_labels[approach] = queue
 
             ttk.Label(
-                card, text="Queue (oldest first):"
+                card,
+                text="Queue (oldest first):",
             ).pack(anchor=tk.W)
 
             vehicle_list = tk.Listbox(
@@ -191,51 +226,97 @@ class TrafficDashboard:
                 exportselection=False,
                 font=("Consolas", 10),
             )
-            vehicle_list.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
+
+            vehicle_list.pack(
+                fill=tk.BOTH,
+                expand=True,
+                pady=(4, 0),
+            )
+
             self.vehicle_queues[approach + "_list"] = vehicle_list
 
     def _build_statistics(self, parent):
         """Create the traffic statistics panel."""
         stats = ttk.LabelFrame(
-            parent, text="Traffic Statistics", padding=12
+            parent,
+            text="Traffic Statistics",
+            padding=12,
         )
         stats.pack(fill=tk.X)
 
         self.total_vehicles_label = ttk.Label(
-            stats, text="Total waiting vehicles: 0"
+            stats,
+            text="Total waiting vehicles: 0",
         )
-        self.total_vehicles_label.grid(row=0, column=0, sticky=tk.W, padx=8, pady=4)
+        self.total_vehicles_label.grid(
+            row=0,
+            column=0,
+            sticky=tk.W,
+            padx=8,
+            pady=4,
+        )
 
         self.approach_label = ttk.Label(
-            stats, text="Busiest approach: None"
+            stats,
+            text="Busiest approach: None",
         )
-        self.approach_label.grid(row=0, column=1, sticky=tk.W, padx=8, pady=4)
+        self.approach_label.grid(
+            row=0,
+            column=1,
+            sticky=tk.W,
+            padx=8,
+            pady=4,
+        )
 
         self.average_wait_label = ttk.Label(
-            stats, text="Average waiting time: 0.0 s"
+            stats,
+            text="Average waiting time: 0.0 s",
         )
-        self.average_wait_label.grid(row=1, column=0, sticky=tk.W, padx=8, pady=4)
+        self.average_wait_label.grid(
+            row=1,
+            column=0,
+            sticky=tk.W,
+            padx=8,
+            pady=4,
+        )
 
         self.max_queue_label = ttk.Label(
-            stats, text="Maximum queue length: 0"
+            stats,
+            text="Maximum queue length: 0",
         )
-        self.max_queue_label.grid(row=1, column=1, sticky=tk.W, padx=8, pady=4)
+        self.max_queue_label.grid(
+            row=1,
+            column=1,
+            sticky=tk.W,
+            padx=8,
+            pady=4,
+        )
 
         self.state_label = ttk.Label(
-            stats, text="State: STOPPED"
+            stats,
+            text="State: STOPPED",
         )
-        self.state_label.grid(row=2, column=0, sticky=tk.W, padx=8, pady=4)
+        self.state_label.grid(
+            row=2,
+            column=0,
+            sticky=tk.W,
+            padx=8,
+            pady=4,
+        )
 
     def _tick(self):
         """Advance time, adapt signal phases, and move vehicles on green."""
         if self.engine.state == SimulationState.RUNNING:
             delta = self._tick_interval / 1000.0
+
             self.engine.step(delta)
 
             for approach in self.APPROACHES:
                 for vehicle in self.vehicle_queues[approach]:
                     self.vehicle_waiting_times[approach][vehicle] = (
-                        self.vehicle_waiting_times[approach].get(vehicle, 0.0)
+                        self.vehicle_waiting_times[approach].get(
+                            vehicle, 0.0
+                        )
                         + delta
                     )
 
@@ -246,7 +327,7 @@ class TrafficDashboard:
                 self._choose_next_phase()
                 self._phase_elapsed = 0.0
 
-            # Move the oldest vehicle from each green approach once per second.
+            # Move vehicles on green approaches once per second.
             if self._movement_elapsed >= 1.0:
                 self._move_vehicles_on_green()
                 self._movement_elapsed = 0.0
@@ -257,39 +338,69 @@ class TrafficDashboard:
 
     def _axis_demand(self, axis):
         """Return the number of waiting vehicles for an axis."""
-        approaches = ("North", "South") if axis == "NS" else ("East", "West")
-        return sum(len(self.vehicle_queues[name]) for name in approaches)
+        approaches = (
+            ("North", "South")
+            if axis == "NS"
+            else ("East", "West")
+        )
+
+        return sum(
+            len(self.vehicle_queues[name])
+            for name in approaches
+        )
 
     def _set_signal_phase(self, axis):
         """Set one axis green and keep the crossing axis red."""
         self._active_axis = axis
+
         green_approaches = (
-            ("North", "South") if axis == "NS" else ("East", "West")
+            ("North", "South")
+            if axis == "NS"
+            else ("East", "West")
         )
+
         for approach in self.APPROACHES:
             self.signal_states[approach] = (
-                "GREEN" if approach in green_approaches else "RED"
+                "GREEN"
+                if approach in green_approaches
+                else "RED"
             )
 
-        # Give busier approaches a longer green, capped to preserve fairness.
+        # Adjust green duration according to demand, with upper and
+        # lower limits to prevent excessively short or long phases.
         demand = self._axis_demand(axis)
-        self._phase_duration = min(8.0, max(3.0, 3.0 + demand))
+
+        self._phase_duration = min(
+            8.0,
+            max(3.0, 3.0 + demand),
+        )
 
     def _choose_next_phase(self):
-        """Choose the next green axis using current queue demand."""
+        """Choose the next green axis based on current queue demand."""
         ns_demand = self._axis_demand("NS")
         ew_demand = self._axis_demand("EW")
 
         if ns_demand and ew_demand:
-            # When both axes have traffic, alternate to prevent starvation.
-            next_axis = "EW" if self._active_axis == "NS" else "NS"
+            # Alternate when both axes have traffic to prevent starvation.
+            next_axis = (
+                "EW"
+                if self._active_axis == "NS"
+                else "NS"
+            )
+
         elif ns_demand:
             next_axis = "NS"
+
         elif ew_demand:
             next_axis = "EW"
+
         else:
-            # No queues or a tie: keep the cycle moving fairly.
-            next_axis = "EW" if self._active_axis == "NS" else "NS"
+            # Keep the cycle moving even when both queues are empty.
+            next_axis = (
+                "EW"
+                if self._active_axis == "NS"
+                else "NS"
+            )
 
         self._set_signal_phase(next_axis)
 
@@ -300,31 +411,41 @@ class TrafficDashboard:
                 continue
 
             queue = self.vehicle_queues[approach]
+
             if queue:
                 vehicle = queue.pop(0)
-                self.vehicle_waiting_times[approach].pop(vehicle, None)
+                self.vehicle_waiting_times[approach].pop(
+                    vehicle,
+                    None,
+                )
 
+    # NFR-02: Refresh the dashboard only after successful state changes.
     def start_simulation(self):
-        started = self.engine.start()
-        if started:
+        """Start the simulation and refresh after a successful transition."""
+        if self.engine.start():
             self._phase_elapsed = 0.0
             self._movement_elapsed = 0.0
+
             self._choose_next_phase()
-        self._refresh_display()
+            self._refresh_display()
 
     def pause_simulation(self):
-        self.engine.pause()
-        self._refresh_display()
+        """Refresh the dashboard only if pausing succeeds."""
+        if self.engine.pause():
+            self._refresh_display()
 
     def resume_simulation(self):
-        self.engine.resume()
-        self._refresh_display()
+        """Refresh the dashboard only if resuming succeeds."""
+        if self.engine.resume():
+            self._refresh_display()
 
     def stop_simulation(self):
-        self.engine.stop()
-        self._refresh_display()
+        """Refresh the dashboard only if stopping succeeds."""
+        if self.engine.stop():
+            self._refresh_display()
 
     def reset_simulation(self):
+        """Reset the simulation, queues, timers, and signal states."""
         self.engine.reset()
 
         for approach in self.APPROACHES:
@@ -334,35 +455,43 @@ class TrafficDashboard:
 
         self.next_vehicle_id = 1
         self._next_auto_approach = 0
+
         self._phase_elapsed = 0.0
         self._movement_elapsed = 0.0
         self._active_axis = "NS"
         self._phase_duration = 5.0
+
         self._refresh_display()
 
     def add_vehicle(self):
-        """Add a vehicle to the selected approach or rotate across approaches."""
+        """Add a vehicle to a selected approach or use round-robin."""
         selection = self.approach_selector.get()
 
         if selection == "Auto (round-robin)":
             approach = self.APPROACHES[self._next_auto_approach]
+
             self._next_auto_approach = (
                 self._next_auto_approach + 1
             ) % len(self.APPROACHES)
+
         elif selection in self.APPROACHES:
             approach = selection
+
         else:
-            # Defensive fallback if the selector has not been initialized.
+            # Defensive fallback if the selector is not initialized.
             approach = self.APPROACHES[self._next_auto_approach]
+
             self._next_auto_approach = (
                 self._next_auto_approach + 1
             ) % len(self.APPROACHES)
 
         vehicle = f"Vehicle {self.next_vehicle_id}"
+
         self.vehicle_queues[approach].append(vehicle)
         self.vehicle_waiting_times[approach][vehicle] = 0.0
 
         self.next_vehicle_id += 1
+
         self._refresh_display()
 
     def _refresh_display(self):
@@ -390,44 +519,59 @@ class TrafficDashboard:
             )
 
             vehicle_list = self.vehicle_queues[approach + "_list"]
+
             vehicle_list.delete(0, tk.END)
 
             for vehicle in vehicles:
-                waiting_time = self.vehicle_waiting_times[approach].get(
-                    vehicle, 0.0
+                waiting_time = (
+                    self.vehicle_waiting_times[approach].get(
+                        vehicle,
+                        0.0,
+                    )
                 )
+
                 vehicle_list.insert(
-                    tk.END, f"{vehicle}  |  Wait: {waiting_time:.1f} s"
+                    tk.END,
+                    f"{vehicle}  |  Wait: {waiting_time:.1f} s",
                 )
 
         total = sum(queue_lengths.values())
+
         busiest = (
             max(queue_lengths, key=queue_lengths.get)
-            if total > 0 else "None"
+            if total > 0
+            else "None"
         )
+
         max_queue = max(queue_lengths.values(), default=0)
 
         all_waiting_times = [
             waiting_time
             for approach in self.APPROACHES
-            for waiting_time in self.vehicle_waiting_times[approach].values()
+            for waiting_time in self.vehicle_waiting_times[
+                approach
+            ].values()
             if waiting_time is not None
         ]
 
         average_wait = (
             sum(all_waiting_times) / len(all_waiting_times)
-            if all_waiting_times else 0.0
+            if all_waiting_times
+            else 0.0
         )
 
         self.total_vehicles_label.configure(
             text=f"Total waiting vehicles: {total}"
         )
+
         self.approach_label.configure(
             text=f"Busiest approach: {busiest}"
         )
+
         self.average_wait_label.configure(
             text=f"Average waiting time: {average_wait:.1f} s"
         )
+
         self.max_queue_label.configure(
             text=f"Maximum queue length: {max_queue}"
         )
@@ -435,12 +579,18 @@ class TrafficDashboard:
         state = self.engine.state.value.upper()
 
         self.state_label.configure(text=f"State: {state}")
+
         self.status_label.configure(
             text=f"Simulation status: {state}"
         )
+
         self.time_label.configure(
-            text=f"Simulation time: {self.engine.simulation_time:.1f} s"
+            text=(
+                f"Simulation time: "
+                f"{self.engine.simulation_time:.1f} s"
+            )
         )
+
 
 def main():
     root = tk.Tk()
