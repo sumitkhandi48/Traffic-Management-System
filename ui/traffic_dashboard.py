@@ -29,6 +29,13 @@ class TrafficDashboard:
         }
         self.next_vehicle_id = 1
 
+        # Signal phases: North/South and East/West take turns. Phase duration
+        # is adjusted using the number of waiting vehicles.
+        self._active_axis = "NS"
+        self._phase_elapsed = 0.0
+        self._movement_elapsed = 0.0
+        self._phase_duration = 5.0
+        self._tick_interval = 100
         self._configure_styles()
         self._build_interface()
         self._refresh_display()
@@ -79,7 +86,6 @@ class TrafficDashboard:
             ("Resume", self.resume_simulation),
             ("Stop", self.stop_simulation),
             ("Reset", self.reset_simulation),
-            ("Add Vehicle", self.add_vehicle),
         )
 
         for label, command in buttons:
@@ -88,7 +94,29 @@ class TrafficDashboard:
                 text=label,
                 command=command,
                 style="Control.TButton",
-            ).pack(side=tk.LEFT, padx=4, pady=2)
+            ).pack(side=tk.LEFT, padx=3, pady=2)
+
+        # Vehicles can be placed on a chosen approach, or distributed
+        # across North, South, East, and West automatically for demos.
+        ttk.Label(controls, text="Approach:").pack(
+            side=tk.LEFT, padx=(10, 3)
+        )
+        self.approach_selector = ttk.Combobox(
+            controls,
+            values=("Auto (round-robin)", *self.APPROACHES),
+            state="readonly",
+            width=17,
+        )
+        self.approach_selector.current(0)
+        self.approach_selector.pack(side=tk.LEFT, padx=3, pady=2)
+        self._next_auto_approach = 0
+
+        ttk.Button(
+            controls,
+            text="Add Vehicle",
+            command=self.add_vehicle,
+            style="Control.TButton",
+        ).pack(side=tk.LEFT, padx=3, pady=2)
 
         self.time_label = ttk.Label(
             controls, text="Simulation time: 0.0 s"
@@ -199,22 +227,89 @@ class TrafficDashboard:
         self.state_label.grid(row=2, column=0, sticky=tk.W, padx=8, pady=4)
 
     def _tick(self):
+        """Advance time, adapt signal phases, and move vehicles on green."""
         if self.engine.state == SimulationState.RUNNING:
-            self.engine.step(0.1)
+            delta = self._tick_interval / 1000.0
+            self.engine.step(delta)
 
             for approach in self.APPROACHES:
                 for vehicle in self.vehicle_queues[approach]:
                     self.vehicle_waiting_times[approach][vehicle] = (
                         self.vehicle_waiting_times[approach].get(vehicle, 0.0)
-                        + 0.1
+                        + delta
                     )
+
+            self._phase_elapsed += delta
+            self._movement_elapsed += delta
+
+            if self._phase_elapsed >= self._phase_duration:
+                self._choose_next_phase()
+                self._phase_elapsed = 0.0
+
+            # Move the oldest vehicle from each green approach once per second.
+            if self._movement_elapsed >= 1.0:
+                self._move_vehicles_on_green()
+                self._movement_elapsed = 0.0
 
             self._refresh_display()
 
-        self.root.after(100, self._tick)
+        self.root.after(self._tick_interval, self._tick)
+
+    def _axis_demand(self, axis):
+        """Return the number of waiting vehicles for an axis."""
+        approaches = ("North", "South") if axis == "NS" else ("East", "West")
+        return sum(len(self.vehicle_queues[name]) for name in approaches)
+
+    def _set_signal_phase(self, axis):
+        """Set one axis green and keep the crossing axis red."""
+        self._active_axis = axis
+        green_approaches = (
+            ("North", "South") if axis == "NS" else ("East", "West")
+        )
+        for approach in self.APPROACHES:
+            self.signal_states[approach] = (
+                "GREEN" if approach in green_approaches else "RED"
+            )
+
+        # Give busier approaches a longer green, capped to preserve fairness.
+        demand = self._axis_demand(axis)
+        self._phase_duration = min(8.0, max(3.0, 3.0 + demand))
+
+    def _choose_next_phase(self):
+        """Choose the next green axis using current queue demand."""
+        ns_demand = self._axis_demand("NS")
+        ew_demand = self._axis_demand("EW")
+
+        if ns_demand and ew_demand:
+            # When both axes have traffic, alternate to prevent starvation.
+            next_axis = "EW" if self._active_axis == "NS" else "NS"
+        elif ns_demand:
+            next_axis = "NS"
+        elif ew_demand:
+            next_axis = "EW"
+        else:
+            # No queues or a tie: keep the cycle moving fairly.
+            next_axis = "EW" if self._active_axis == "NS" else "NS"
+
+        self._set_signal_phase(next_axis)
+
+    def _move_vehicles_on_green(self):
+        """Remove the oldest vehicle from each approach currently on green."""
+        for approach in self.APPROACHES:
+            if self.signal_states[approach] != "GREEN":
+                continue
+
+            queue = self.vehicle_queues[approach]
+            if queue:
+                vehicle = queue.pop(0)
+                self.vehicle_waiting_times[approach].pop(vehicle, None)
 
     def start_simulation(self):
-        self.engine.start()
+        started = self.engine.start()
+        if started:
+            self._phase_elapsed = 0.0
+            self._movement_elapsed = 0.0
+            self._choose_next_phase()
         self._refresh_display()
 
     def pause_simulation(self):
@@ -238,13 +333,30 @@ class TrafficDashboard:
             self.signal_states[approach] = "RED"
 
         self.next_vehicle_id = 1
+        self._next_auto_approach = 0
+        self._phase_elapsed = 0.0
+        self._movement_elapsed = 0.0
+        self._active_axis = "NS"
+        self._phase_duration = 5.0
         self._refresh_display()
 
     def add_vehicle(self):
-        approach = max(
-            self.APPROACHES,
-            key=lambda name: len(self.vehicle_queues[name]),
-        )
+        """Add a vehicle to the selected approach or rotate across approaches."""
+        selection = self.approach_selector.get()
+
+        if selection == "Auto (round-robin)":
+            approach = self.APPROACHES[self._next_auto_approach]
+            self._next_auto_approach = (
+                self._next_auto_approach + 1
+            ) % len(self.APPROACHES)
+        elif selection in self.APPROACHES:
+            approach = selection
+        else:
+            # Defensive fallback if the selector has not been initialized.
+            approach = self.APPROACHES[self._next_auto_approach]
+            self._next_auto_approach = (
+                self._next_auto_approach + 1
+            ) % len(self.APPROACHES)
 
         vehicle = f"Vehicle {self.next_vehicle_id}"
         self.vehicle_queues[approach].append(vehicle)
@@ -263,7 +375,11 @@ class TrafficDashboard:
 
             signal.configure(
                 text=f" {state} ",
-                bg="#c62828" if state == "RED" else "#2e7d32",
+                bg={
+                    "RED": "#c62828",
+                    "GREEN": "#2e7d32",
+                    "YELLOW": "#f9a825",
+                }.get(state, "#c62828"),
             )
 
             vehicles = self.vehicle_queues[approach]
