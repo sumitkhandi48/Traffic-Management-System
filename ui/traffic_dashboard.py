@@ -1,5 +1,6 @@
 """User-friendly dashboard for the traffic management simulation."""
 
+import time
 import tkinter as tk
 from tkinter import ttk
 
@@ -41,6 +42,7 @@ class TrafficDashboard:
 
         # Dashboard refresh interval in milliseconds.
         self._tick_interval = 100
+        self._last_tick_time = time.monotonic()
 
         self._configure_styles()
         self._build_interface()
@@ -305,36 +307,48 @@ class TrafficDashboard:
         )
 
     def _tick(self):
-        """Advance time, adapt signal phases, and move vehicles on green."""
-        if self.engine.state == SimulationState.RUNNING:
-            delta = self._tick_interval / 1000.0
+        """Advance simulation using elapsed time and keep the loop scheduled."""
+        try:
+            now = time.monotonic()
+            delta = max(0.0, now - self._last_tick_time)
+            self._last_tick_time = now
 
-            self.engine.step(delta)
+            if self.engine.state == SimulationState.RUNNING:
+                self.engine.step(delta)
 
-            for approach in self.APPROACHES:
-                for vehicle in self.vehicle_queues[approach]:
-                    self.vehicle_waiting_times[approach][vehicle] = (
-                        self.vehicle_waiting_times[approach].get(
-                            vehicle, 0.0
+                for approach in self.APPROACHES:
+                    for vehicle in self.vehicle_queues[approach]:
+                        self.vehicle_waiting_times[approach][vehicle] = (
+                            self.vehicle_waiting_times[approach].get(
+                                vehicle, 0.0
+                            )
+                            + delta
                         )
-                        + delta
-                    )
 
-            self._phase_elapsed += delta
-            self._movement_elapsed += delta
+                self._phase_elapsed += delta
+                self._movement_elapsed += delta
 
-            if self._phase_elapsed >= self._phase_duration:
-                self._choose_next_phase()
-                self._phase_elapsed = 0.0
+                while self._phase_elapsed >= self._phase_duration:
+                    self._phase_elapsed -= self._phase_duration
+                    self._choose_next_phase()
 
-            # Move vehicles on green approaches once per second.
-            if self._movement_elapsed >= 1.0:
-                self._move_vehicles_on_green()
-                self._movement_elapsed = 0.0
+                # Preserve elapsed time if processing is delayed.
+                while self._movement_elapsed >= 1.0:
+                    self._move_vehicles_on_green()
+                    self._movement_elapsed -= 1.0
 
-            self._refresh_display()
+                self._refresh_display()
 
-        self.root.after(self._tick_interval, self._tick)
+        except Exception as exc:
+            print(f"Simulation update failed: {exc}")
+
+        finally:
+            try:
+                self.root.after(self._tick_interval, self._tick)
+            except tk.TclError:
+                # The window may have been closed during an update.
+                pass
+
 
     def _axis_demand(self, axis):
         """Return the number of waiting vehicles for an axis."""
