@@ -13,6 +13,10 @@ class TrafficDashboard:
 
     APPROACHES = ("North", "South", "East", "West")
 
+    # FR-07: Green-light duration limits, in seconds.
+    MIN_GREEN_DURATION = 3.0
+    MAX_GREEN_DURATION = 8.0
+
     def __init__(self, root):
         self.root = root
         self.root.title("Traffic Management System")
@@ -396,7 +400,6 @@ class TrafficDashboard:
                 # The window may have been closed during an update.
                 pass
 
-
     def _axis_demand(self, axis):
         """Return the number of waiting vehicles for an axis."""
         approaches = (
@@ -428,12 +431,16 @@ class TrafficDashboard:
                 else "RED"
             )
 
-        # Adjust green duration according to traffic demand.
+        # FR-07: Adjust green duration according to demand while
+        # respecting the configured minimum and maximum limits.
         demand = self._axis_demand(axis)
 
         self._phase_duration = min(
-            8.0,
-            max(3.0, 3.0 + demand),
+            self.MAX_GREEN_DURATION,
+            max(
+                self.MIN_GREEN_DURATION,
+                self.MIN_GREEN_DURATION + demand,
+            ),
         )
 
     def _choose_next_phase(self):
