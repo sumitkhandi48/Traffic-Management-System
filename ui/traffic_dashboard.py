@@ -4,6 +4,7 @@ import time
 import tkinter as tk
 from tkinter import ttk
 
+from simulation.congestion import CongestionDetector
 from simulation.engine import SimulationEngine, SimulationState
 
 
@@ -23,7 +24,9 @@ class TrafficDashboard:
         self.root.minsize(850, 600)
 
         self.engine = SimulationEngine()
-
+        self.congestion_detector = CongestionDetector()
+        self.emergency_approaches = set()
+        self.emergency_vehicles = set()
         self.signal_states = {
             approach: "RED" for approach in self.APPROACHES
         }
@@ -87,7 +90,17 @@ class TrafficDashboard:
             main,
             text="Simulation dashboard",
         ).pack(anchor=tk.W, pady=(0, 14))
+        self.emergency_status_label = ttk.Label(
+            main,
+            text="Emergency priority: INACTIVE",
+            style="Status.TLabel",
+            foreground="#2e7d32",
+        )
 
+        self.emergency_status_label.pack(
+            anchor=tk.W,
+            pady=(0, 8),
+        )
         self._build_controls(main)
         self._build_intersection(main)
         self._build_statistics(main)
@@ -98,6 +111,7 @@ class TrafficDashboard:
             style="Status.TLabel",
         )
         self.status_label.pack(anchor=tk.W, pady=(12, 0))
+
 
     def _build_controls(self, parent):
         controls = ttk.LabelFrame(
@@ -140,7 +154,25 @@ class TrafficDashboard:
         self.approach_selector.pack(side=tk.LEFT, padx=3, pady=2)
 
         self._next_auto_approach = 0
+        # Allow normal or emergency vehicle insertion.
+        ttk.Label(
+            controls,
+            text="Vehicle type:",
+        ).pack(side=tk.LEFT, padx=(8, 3))
 
+        self.vehicle_type_selector = ttk.Combobox(
+            controls,
+            values=("Normal", "Emergency"),
+            state="readonly",
+            width=10,
+        )
+
+        self.vehicle_type_selector.current(0)
+        self.vehicle_type_selector.pack(
+            side=tk.LEFT,
+            padx=3,
+            pady=2,
+        )
         ttk.Button(
             controls,
             text="Add Vehicle",
@@ -176,6 +208,8 @@ class TrafficDashboard:
 
         self.signal_labels = {}
         self.queue_labels = {}
+        self.demand_labels = {}
+        self.congestion_labels = {}
 
         for approach, (row, column) in positions.items():
             card = ttk.LabelFrame(
@@ -220,7 +254,20 @@ class TrafficDashboard:
             queue.pack(anchor=tk.W, pady=(10, 4))
 
             self.queue_labels[approach] = queue
+            demand_label = ttk.Label(
+                card,
+                text="Traffic demand: 0.0",
+            )
+            demand_label.pack(anchor=tk.W, pady=(2, 0))
+            self.demand_labels[approach] = demand_label
 
+            congestion_label = ttk.Label(
+                card,
+                text="Congestion: NORMAL",
+                foreground="#2e7d32",
+            )
+            congestion_label.pack(anchor=tk.W, pady=(2, 4))
+            self.congestion_labels[approach] = congestion_label
             ttk.Label(
                 card,
                 text="Queue (oldest first):",
@@ -366,6 +413,7 @@ class TrafficDashboard:
             for name in approaches
         )
 
+
     def _set_signal_phase(self, axis):
         """Set one axis green and keep the crossing axis red."""
         self._active_axis = axis
@@ -396,26 +444,43 @@ class TrafficDashboard:
         )
 
     def _choose_next_phase(self):
-        """Choose the next green axis based on current queue demand."""
+        """Prioritize emergency vehicles, then balance normal traffic."""
+
+        emergency_approaches = [
+            approach
+            for approach in self.APPROACHES
+            if any(
+                vehicle in self.emergency_vehicles
+                for vehicle in self.vehicle_queues[approach]
+            )
+        ]
+
+        if emergency_approaches:
+            emergency_approach = emergency_approaches[0]
+
+            next_axis = (
+                "NS"
+                if emergency_approach in ("North", "South")
+                else "EW"
+            )
+
+            self._set_signal_phase(next_axis)
+            return
+
         ns_demand = self._axis_demand("NS")
         ew_demand = self._axis_demand("EW")
 
         if ns_demand and ew_demand:
-            # Alternate when both axes have traffic to prevent starvation.
             next_axis = (
                 "EW"
                 if self._active_axis == "NS"
                 else "NS"
             )
-
         elif ns_demand:
             next_axis = "NS"
-
         elif ew_demand:
             next_axis = "EW"
-
         else:
-            # Keep the cycle moving even when both queues are empty.
             next_axis = (
                 "EW"
                 if self._active_axis == "NS"
@@ -423,6 +488,7 @@ class TrafficDashboard:
             )
 
         self._set_signal_phase(next_axis)
+
 
     def _move_vehicles_on_green(self):
         """Remove the oldest vehicle from each approach currently on green."""
@@ -438,6 +504,13 @@ class TrafficDashboard:
                     vehicle,
                     None,
                 )
+                self.emergency_vehicles.discard(vehicle)
+
+                if not any(
+                    queued_vehicle in self.emergency_vehicles
+                    for queued_vehicle in queue
+                ):
+                    self.emergency_approaches.discard(approach)
 
     # NFR-02: Refresh the dashboard only after successful state changes.
     def start_simulation(self):
@@ -472,7 +545,8 @@ class TrafficDashboard:
             self.vehicle_queues[approach].clear()
             self.vehicle_waiting_times[approach].clear()
             self.signal_states[approach] = "RED"
-
+        self.emergency_vehicles.clear()
+        self.emergency_approaches.clear()
         self.next_vehicle_id = 1
         self._next_auto_approach = 0
 
@@ -510,6 +584,12 @@ class TrafficDashboard:
         self.vehicle_queues[approach].append(vehicle)
         self.vehicle_waiting_times[approach][vehicle] = 0.0
 
+        vehicle_type = self.vehicle_type_selector.get()
+
+        if vehicle_type == "Emergency":
+            self.emergency_vehicles.add(vehicle)
+            self.emergency_approaches.add(approach)
+
         self.next_vehicle_id += 1
 
         self._refresh_display()
@@ -533,7 +613,30 @@ class TrafficDashboard:
 
             vehicles = self.vehicle_queues[approach]
             queue_lengths[approach] = len(vehicles)
+            waiting_time_total = sum(
+                self.vehicle_waiting_times[approach].get(vehicle, 0.0)
+                for vehicle in vehicles
+            )
 
+            demand_score = len(vehicles) + 0.1 * waiting_time_total
+
+            self.demand_labels[approach].configure(
+                text=f"Traffic demand: {demand_score:.1f}"
+            )
+
+            is_congested = self.congestion_detector.detect(
+                demand_score,
+                len(vehicles),
+            )
+
+            self.congestion_labels[approach].configure(
+                text=(
+                    "Congestion: CONGESTED"
+                    if is_congested
+                    else "Congestion: NORMAL"
+                ),
+                foreground="#c62828" if is_congested else "#2e7d32",
+            )
             self.queue_labels[approach].configure(
                 text=f"Waiting vehicles: {len(vehicles)}"
             )
@@ -550,10 +653,40 @@ class TrafficDashboard:
                     )
                 )
 
+                marker = (
+                    "[EMERGENCY]"
+                    if vehicle in self.emergency_vehicles
+                    else "[NORMAL]"
+                )
+
                 vehicle_list.insert(
                     tk.END,
-                    f"{vehicle}  |  Wait: {waiting_time:.1f} s",
+                    f"{marker} {vehicle} | Wait: {waiting_time:.1f} s",
                 )
+
+        emergency_approaches = [
+            approach
+            for approach in self.APPROACHES
+            if any(
+                vehicle in self.emergency_vehicles
+                for vehicle in self.vehicle_queues[approach]
+            )
+        ]
+
+        if emergency_approaches:
+            emergency_text = (
+                "Emergency priority: ACTIVE - "
+                + ", ".join(emergency_approaches)
+            )
+            emergency_color = "#c62828"
+        else:
+            emergency_text = "Emergency priority: INACTIVE"
+            emergency_color = "#2e7d32"
+
+        self.emergency_status_label.configure(
+            text=emergency_text,
+            foreground=emergency_color,
+        )
 
         total = sum(queue_lengths.values())
 
