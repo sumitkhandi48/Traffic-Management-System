@@ -444,7 +444,7 @@ class TrafficDashboard:
         )
 
     def _choose_next_phase(self):
-        """Prioritize emergency vehicles, then balance normal traffic."""
+        """Select the next signal phase using traffic demand and emergency priority."""
 
         emergency_approaches = [
             approach
@@ -455,32 +455,27 @@ class TrafficDashboard:
             )
         ]
 
+        # Preserve priority for an approach containing an emergency vehicle.
         if emergency_approaches:
             emergency_approach = emergency_approaches[0]
-
             next_axis = (
                 "NS"
                 if emergency_approach in ("North", "South")
                 else "EW"
             )
-
             self._set_signal_phase(next_axis)
             return
 
         ns_demand = self._axis_demand("NS")
         ew_demand = self._axis_demand("EW")
 
-        if ns_demand and ew_demand:
-            next_axis = (
-                "EW"
-                if self._active_axis == "NS"
-                else "NS"
-            )
-        elif ns_demand:
+        if ns_demand > ew_demand:
             next_axis = "NS"
-        elif ew_demand:
+        elif ew_demand > ns_demand:
             next_axis = "EW"
         else:
+            # Alternate axes when demand is equal, including when both
+            # queues are empty.
             next_axis = (
                 "EW"
                 if self._active_axis == "NS"
