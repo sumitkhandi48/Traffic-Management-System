@@ -92,3 +92,48 @@ def test_tick_uses_actual_elapsed_time():
         app._tick()
 
     assert app.engine.simulation_time == pytest.approx(0.35)
+
+def test_tick_uses_updated_traffic_demand_for_next_phase():
+    """The next phase must use the latest queue counts."""
+    app = make_dashboard()
+    app.engine.start()
+
+    # Set up the initial traffic conditions.
+    app.vehicle_queues["North"] = ["N1", "N2", "N3", "N4", "N5"]
+    app.vehicle_queues["East"] = ["E1", "E2"]
+
+    # Traffic conditions change before the current phase expires.
+    app.vehicle_queues["North"] = ["N1"]
+    app.vehicle_queues["East"] = [
+        "E1", "E2", "E3", "E4", "E5", "E6"
+    ]
+
+    app.signal_states = {
+        "North": "GREEN",
+        "South": "GREEN",
+        "East": "RED",
+        "West": "RED",
+    }
+
+    app.emergency_vehicles = set()
+
+    # Use the actual controller instead of the mocked method.
+    app._choose_next_phase = (
+        TrafficDashboard._choose_next_phase.__get__(
+            app, TrafficDashboard
+        )
+    )
+
+    app._phase_elapsed = 4.95
+
+    with patch(
+        "ui.traffic_dashboard.time.monotonic",
+        return_value=10.1,
+    ):
+        app._tick()
+
+    assert app._active_axis == "EW"
+    assert app.signal_states["East"] == "GREEN"
+    assert app.signal_states["West"] == "GREEN"
+    assert app.signal_states["North"] == "RED"
+    assert app.signal_states["South"] == "RED"
