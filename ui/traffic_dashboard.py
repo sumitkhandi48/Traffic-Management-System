@@ -16,6 +16,9 @@ class TrafficDashboard:
     # FR-07: Green-light duration limits, in seconds.
     MIN_GREEN_DURATION = 3.0
     MAX_GREEN_DURATION = 8.0
+    # FR-09: Signal clearance durations, in seconds.
+    YELLOW_CLEARANCE_DURATION = 1.0
+    ALL_RED_CLEARANCE_DURATION = 1.0
 
     def __init__(self, root):
         self.root = root
@@ -46,6 +49,11 @@ class TrafficDashboard:
         self._phase_elapsed = 0.0
         self._movement_elapsed = 0.0
         self._phase_duration = 5.0
+        # FR-09: Signal transition tracking.
+        self._transition_state = None
+        self._transition_elapsed = 0.0
+        self._pending_axis = None
+        self._emergency_override = False
 
         # Dashboard refresh interval in milliseconds.
         self._tick_interval = 100
@@ -357,8 +365,9 @@ class TrafficDashboard:
             pady=4,
         )
 
+    
     def _tick(self):
-        """Advance simulation using elapsed time and keep the loop scheduled."""
+        """Advance simulation and safely handle signal transitions."""
         try:
             now = time.monotonic()
             delta = max(0.0, now - self._last_tick_time)
@@ -376,17 +385,61 @@ class TrafficDashboard:
                             + delta
                         )
 
-                self._phase_elapsed += delta
-                self._movement_elapsed += delta
+                # Check whether an emergency vehicle needs another axis.
+                emergency_axis = (
+                    self._emergency_axis()
+                    if hasattr(self, "_emergency_axis")
+                    else None
+                )
 
-                while self._phase_elapsed >= self._phase_duration:
-                    self._phase_elapsed -= self._phase_duration
-                    self._choose_next_phase()
+                if (
+                    emergency_axis is not None
+                    and emergency_axis != self._active_axis
+                ):
+                    self._begin_signal_transition(emergency_axis)
 
-                # Preserve elapsed time if processing is delayed.
-                while self._movement_elapsed >= 1.0:
-                    self._move_vehicles_on_green()
-                    self._movement_elapsed -= 1.0
+                # During yellow/all-red, do not move vehicles or run
+                # the normal phase timer.
+                if getattr(self, "_transition_state", None) is not None:
+                    self._advance_signal_transition(delta)
+                    self._phase_elapsed = 0.0
+                    self._movement_elapsed = 0.0
+
+                else:
+                    self._phase_elapsed += delta
+                    self._movement_elapsed += delta
+
+                    
+                    while self._phase_elapsed >= self._phase_duration:
+                        self._phase_elapsed -= self._phase_duration
+
+                        # Remember the currently active signal phase.
+                        previous_axis = self._active_axis
+                        previous_states = self.signal_states.copy()
+
+                        # Let the existing controller choose the next axis.
+                        self._choose_next_phase()
+                        selected_axis = self._active_axis
+
+                        # If the axis changes, restore the old signals
+                        # and perform yellow/all-red clearance first.
+                        if selected_axis != previous_axis:
+                            self._active_axis = previous_axis
+                            self.signal_states.update(previous_states)
+
+                            self._begin_signal_transition(selected_axis)
+
+                        if getattr(self, "_transition_state", None) is not None:
+                            self._phase_elapsed = 0.0
+                            self._movement_elapsed = 0.0
+                            break
+
+
+                    # Move vehicles only when no transition is active.
+                    if getattr(self, "_transition_state", None) is None:
+                        while self._movement_elapsed >= 1.0:
+                            self._move_vehicles_on_green()
+                            self._movement_elapsed -= 1.0
 
                 self._refresh_display()
 
@@ -397,8 +450,8 @@ class TrafficDashboard:
             try:
                 self.root.after(self._tick_interval, self._tick)
             except tk.TclError:
-                # The window may have been closed during an update.
                 pass
+
 
     def _axis_demand(self, axis):
         """Return the number of waiting vehicles for an axis."""
@@ -412,6 +465,71 @@ class TrafficDashboard:
             len(self.vehicle_queues[name])
             for name in approaches
         )
+
+    
+    def _begin_signal_transition(self, axis):
+        """Begin yellow clearance before switching signal axes."""
+        if axis == self._active_axis:
+            return
+
+        if getattr(self, "_transition_state", None) is not None:
+            self._pending_axis = axis
+            return
+
+        self._pending_axis = axis
+        self._transition_state = "YELLOW"
+        self._transition_elapsed = 0.0
+        self._emergency_override = False
+
+        for approach in self.APPROACHES:
+            if self.signal_states[approach] == "GREEN":
+                self.signal_states[approach] = "YELLOW"
+
+    def _advance_signal_transition(self, delta):
+        """Advance yellow and all-red clearance intervals."""
+        if self._transition_state is None:
+            return
+
+        self._transition_elapsed += delta
+
+        if (
+            self._transition_state == "YELLOW"
+            and self._transition_elapsed
+            >= self.YELLOW_CLEARANCE_DURATION
+        ):
+            for approach in self.APPROACHES:
+                self.signal_states[approach] = "RED"
+
+            self._transition_state = "ALL_RED"
+            self._transition_elapsed = 0.0
+
+        elif (
+            self._transition_state == "ALL_RED"
+            and self._transition_elapsed
+            >= self.ALL_RED_CLEARANCE_DURATION
+        ):
+            next_axis = self._pending_axis
+            self._transition_state = None
+            self._transition_elapsed = 0.0
+            self._pending_axis = None
+
+            if next_axis is not None:
+                self._set_signal_phase(next_axis)
+
+    def _emergency_axis(self):
+        """Return the axis containing the first waiting emergency vehicle."""
+        for approach in self.APPROACHES:
+            if any(
+                vehicle in self.emergency_vehicles
+                for vehicle in self.vehicle_queues[approach]
+            ):
+                return (
+                    "NS"
+                    if approach in ("North", "South")
+                    else "EW"
+                )
+
+        return None
 
 
     def _set_signal_phase(self, axis):
@@ -443,69 +561,70 @@ class TrafficDashboard:
             ),
         )
 
+    
+    
     def _choose_next_phase(self):
-        """Select the next signal phase using traffic demand and emergency priority."""
+        """Select the next phase using emergency priority and traffic demand."""
 
-        emergency_approaches = [
-            approach
-            for approach in self.APPROACHES
-            if any(
-                vehicle in self.emergency_vehicles
-                for vehicle in self.vehicle_queues[approach]
-            )
-        ]
+        emergency_axis = self._emergency_axis()
 
-        # Preserve priority for an approach containing an emergency vehicle.
-        if emergency_approaches:
-            emergency_approach = emergency_approaches[0]
-            next_axis = (
-                "NS"
-                if emergency_approach in ("North", "South")
-                else "EW"
-            )
-            self._set_signal_phase(next_axis)
-            return
+        if emergency_axis is not None:
+            next_axis = emergency_axis
 
-        ns_demand = self._axis_demand("NS")
-        ew_demand = self._axis_demand("EW")
-
-        if ns_demand > ew_demand:
-            next_axis = "NS"
-        elif ew_demand > ns_demand:
-            next_axis = "EW"
         else:
-            # Alternate axes when demand is equal, including when both
-            # queues are empty.
-            next_axis = (
-                "EW"
-                if self._active_axis == "NS"
-                else "NS"
-            )
+            ns_demand = self._axis_demand("NS")
+            ew_demand = self._axis_demand("EW")
+
+            if ns_demand > ew_demand:
+                next_axis = "NS"
+            elif ew_demand > ns_demand:
+                next_axis = "EW"
+            else:
+                next_axis = (
+                    "EW" if self._active_axis == "NS" else "NS"
+                )
 
         self._set_signal_phase(next_axis)
 
 
+
+
     def _move_vehicles_on_green(self):
-        """Remove the oldest vehicle from each approach currently on green."""
+        """Move emergency vehicles first, otherwise preserve FIFO order."""
+
         for approach in self.APPROACHES:
             if self.signal_states[approach] != "GREEN":
                 continue
 
             queue = self.vehicle_queues[approach]
 
-            if queue:
-                vehicle = queue.pop(0)
-                self.vehicle_waiting_times[approach].pop(
-                    vehicle,
-                    None,
-                )
-                self.emergency_vehicles.discard(vehicle)
+            if not queue:
+                continue
 
-                if not any(
-                    queued_vehicle in self.emergency_vehicles
-                    for queued_vehicle in queue
-                ):
-                    self.emergency_approaches.discard(approach)
+            emergency_index = next(
+                (
+                    index
+                    for index, vehicle in enumerate(queue)
+                    if vehicle in self.emergency_vehicles
+                ),
+                None,
+            )
+
+            if emergency_index is not None:
+                vehicle = queue.pop(emergency_index)
+            else:
+                vehicle = queue.pop(0)
+
+            self.vehicle_waiting_times[approach].pop(vehicle, None)
+
+            self.emergency_vehicles.discard(vehicle)
+
+            if not any(
+                queued_vehicle in self.emergency_vehicles
+                for queued_vehicle in queue
+            ):
+                self.emergency_approaches.discard(approach)
+
 
     # NFR-02: Refresh the dashboard only after successful state changes.
     def start_simulation(self):
@@ -550,8 +669,15 @@ class TrafficDashboard:
         self._active_axis = "NS"
         self._phase_duration = 5.0
 
+        # Reset FR-09 signal transition state.
+        self._transition_state = None
+        self._transition_elapsed = 0.0
+        self._pending_axis = None
+        self._emergency_override = False
+
         self._refresh_display()
 
+    
     def add_vehicle(self):
         """Add a vehicle to a selected approach or use round-robin."""
         selection = self.approach_selector.get()
@@ -567,7 +693,6 @@ class TrafficDashboard:
             approach = selection
 
         else:
-            # Defensive fallback if the selector is not initialized.
             approach = self.APPROACHES[self._next_auto_approach]
 
             self._next_auto_approach = (
@@ -585,9 +710,22 @@ class TrafficDashboard:
             self.emergency_vehicles.add(vehicle)
             self.emergency_approaches.add(approach)
 
+            if self.engine.state == SimulationState.RUNNING:
+                self._emergency_override = True
+
+                emergency_axis = (
+                    "NS"
+                    if approach in ("North", "South")
+                    else "EW"
+                )
+
+                if emergency_axis != self._active_axis:
+                    self._begin_signal_transition(emergency_axis)
+
         self.next_vehicle_id += 1
 
         self._refresh_display()
+
 
     def _refresh_display(self):
         """Refresh signal indicators, queues, and traffic statistics."""

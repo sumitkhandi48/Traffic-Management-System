@@ -150,3 +150,183 @@ def test_start_action_avoids_unnecessary_refresh_work():
     assert app._movement_elapsed == 0.0
     app._choose_next_phase.assert_called_once()
     app._refresh_display.assert_called_once()
+
+
+def make_dashboard_for_emergency_test():
+    """Create a dashboard without opening a Tkinter window."""
+    app = TrafficDashboard.__new__(TrafficDashboard)
+
+    app.APPROACHES = ("North", "South", "East", "West")
+    app.vehicle_queues = {
+        approach: [] for approach in app.APPROACHES
+    }
+    app.vehicle_waiting_times = {
+        approach: {} for approach in app.APPROACHES
+    }
+    app.signal_states = {
+        approach: "RED" for approach in app.APPROACHES
+    }
+    app.emergency_vehicles = set()
+    app.emergency_approaches = set()
+    app._active_axis = "EW"
+
+    return app
+
+
+def test_emergency_vehicle_moves_before_normal_vehicle():
+    """An emergency vehicle gets priority within its approach queue."""
+    app = make_dashboard_for_emergency_test()
+
+    app.vehicle_queues["North"] = ["normal-1", "emergency-1"]
+    app.emergency_vehicles.add("emergency-1")
+    app.vehicle_waiting_times["North"] = {
+        "normal-1": 5,
+        "emergency-1": 10,
+    }
+    app.signal_states["North"] = "GREEN"
+
+    app._move_vehicles_on_green()
+
+    assert app.vehicle_queues["North"] == ["normal-1"]
+    assert "emergency-1" not in app.emergency_vehicles
+    assert "emergency-1" not in app.vehicle_waiting_times["North"]
+
+
+def test_emergency_vehicle_does_not_move_on_red_signal():
+    """An emergency vehicle must wait while its signal is red."""
+    app = make_dashboard_for_emergency_test()
+
+    app.vehicle_queues["East"] = ["emergency-1"]
+    app.emergency_vehicles.add("emergency-1")
+    app.signal_states["East"] = "RED"
+
+    app._move_vehicles_on_green()
+
+    assert app.vehicle_queues["East"] == ["emergency-1"]
+    assert "emergency-1" in app.emergency_vehicles
+
+
+def test_emergency_priority_selects_correct_axis():
+    """An emergency vehicle determines the selected signal axis."""
+    app = make_dashboard_for_emergency_test()
+
+    app.vehicle_queues["North"] = ["emergency-1"]
+    app.emergency_vehicles.add("emergency-1")
+    app._set_signal_phase = Mock()
+
+    app._choose_next_phase()
+
+    app._set_signal_phase.assert_called_once_with("NS")
+
+
+def test_emergency_priority_keeps_opposite_axis_red():
+    """Selecting an emergency axis keeps the conflicting axis red."""
+    app = make_dashboard_for_emergency_test()
+
+    app._set_signal_phase = lambda axis: (
+        app.signal_states.update({
+            "North": "GREEN" if axis == "NS" else "RED",
+            "South": "GREEN" if axis == "NS" else "RED",
+            "East": "GREEN" if axis == "EW" else "RED",
+            "West": "GREEN" if axis == "EW" else "RED",
+        })
+    )
+
+    app._set_signal_phase("NS")
+
+    assert app.signal_states["North"] == "GREEN"
+    assert app.signal_states["South"] == "GREEN"
+    assert app.signal_states["East"] == "RED"
+    assert app.signal_states["West"] == "RED"
+
+
+def test_signal_transition_uses_yellow_and_all_red_clearance():
+    """Signal axes must switch only after yellow and all-red clearance."""
+    app = make_dashboard_for_emergency_test()
+
+    app.YELLOW_CLEARANCE_DURATION = 1.0
+    app.ALL_RED_CLEARANCE_DURATION = 1.0
+    app._transition_state = None
+    app._transition_elapsed = 0.0
+    app._pending_axis = None
+    app._emergency_override = False
+    app._phase_duration = 5.0
+
+    app._set_signal_phase = lambda axis: (
+        app.signal_states.update({
+            "North": "GREEN" if axis == "NS" else "RED",
+            "South": "GREEN" if axis == "NS" else "RED",
+            "East": "GREEN" if axis == "EW" else "RED",
+            "West": "GREEN" if axis == "EW" else "RED",
+        }),
+        setattr(app, "_active_axis", axis),
+    )
+
+    app._set_signal_phase("NS")
+    app._begin_signal_transition("EW")
+
+    assert app.signal_states["North"] == "YELLOW"
+    assert app.signal_states["South"] == "YELLOW"
+    assert app.signal_states["East"] == "RED"
+    assert app.signal_states["West"] == "RED"
+
+    app._advance_signal_transition(1.0)
+
+    assert app._transition_state == "ALL_RED"
+    assert all(
+        state == "RED" for state in app.signal_states.values()
+    )
+
+    app._advance_signal_transition(1.0)
+
+    assert app._transition_state is None
+    assert app.signal_states["East"] == "GREEN"
+    assert app.signal_states["West"] == "GREEN"
+    assert app.signal_states["North"] == "RED"
+    assert app.signal_states["South"] == "RED"
+
+
+def test_emergency_axis_waits_for_signal_clearance():
+    """Emergency priority must not bypass yellow and all-red clearance."""
+    app = make_dashboard_for_emergency_test()
+
+    app.YELLOW_CLEARANCE_DURATION = 1.0
+    app.ALL_RED_CLEARANCE_DURATION = 1.0
+    app._transition_state = None
+    app._transition_elapsed = 0.0
+    app._pending_axis = None
+    app._emergency_override = False
+    app._phase_duration = 5.0
+
+    app._set_signal_phase = lambda axis: (
+        app.signal_states.update({
+            "North": "GREEN" if axis == "NS" else "RED",
+            "South": "GREEN" if axis == "NS" else "RED",
+            "East": "GREEN" if axis == "EW" else "RED",
+            "West": "GREEN" if axis == "EW" else "RED",
+        }),
+        setattr(app, "_active_axis", axis),
+    )
+
+    app._set_signal_phase("EW")
+    app.vehicle_queues["North"] = ["emergency-1"]
+    app.emergency_vehicles.add("emergency-1")
+
+    app._begin_signal_transition("NS")
+
+    assert app.signal_states["East"] == "YELLOW"
+    assert app.signal_states["West"] == "YELLOW"
+    assert app.signal_states["North"] == "RED"
+
+    app._advance_signal_transition(1.0)
+
+    assert all(
+        state == "RED" for state in app.signal_states.values()
+    )
+
+    app._advance_signal_transition(1.0)
+
+    assert app.signal_states["North"] == "GREEN"
+    assert app.signal_states["South"] == "GREEN"
+    assert app.signal_states["East"] == "RED"
+    assert app.signal_states["West"] == "RED"
