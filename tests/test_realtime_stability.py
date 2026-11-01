@@ -24,6 +24,15 @@ def make_dashboard():
     app._phase_elapsed = 0.0
     app._movement_elapsed = 0.0
     app._phase_duration = 5.0
+    app.signal_states = {
+        approach: (
+            "GREEN" if approach in ("North", "South") else "RED"
+        )
+        for approach in app.APPROACHES
+    }
+
+    app.emergency_vehicles = set()
+    app.emergency_approaches = set()
     app._active_axis = "NS"
 
     app._choose_next_phase = Mock()
@@ -92,3 +101,95 @@ def test_tick_uses_actual_elapsed_time():
         app._tick()
 
     assert app.engine.simulation_time == pytest.approx(0.35)
+
+
+def test_tick_starts_clearance_when_normal_phase_expires():
+    """A phase change through tick must start yellow clearance."""
+    app = make_dashboard()
+    app.engine.start()
+
+    app.signal_states = {
+        "North": "GREEN",
+        "South": "GREEN",
+        "East": "RED",
+        "West": "RED",
+    }
+
+    app.emergency_vehicles = set()
+    app.emergency_approaches = set()
+
+    app.YELLOW_CLEARANCE_DURATION = 1.0
+    app.ALL_RED_CLEARANCE_DURATION = 1.0
+    app._transition_state = None
+    app._transition_elapsed = 0.0
+    app._pending_axis = None
+    app._emergency_override = False
+
+    app._phase_elapsed = 4.95
+
+    def select_ew_phase():
+        app._active_axis = "EW"
+        app.signal_states.update({
+            "North": "RED",
+            "South": "RED",
+            "East": "GREEN",
+            "West": "GREEN",
+        })
+
+    app._choose_next_phase.side_effect = select_ew_phase
+
+    with patch(
+        "ui.traffic_dashboard.time.monotonic",
+        return_value=10.1,
+    ):
+        app._tick()
+
+    assert app._transition_state == "YELLOW"
+    assert app._active_axis == "NS"
+
+    assert app.signal_states["North"] == "YELLOW"
+    assert app.signal_states["South"] == "YELLOW"
+    assert app.signal_states["East"] == "RED"
+    assert app.signal_states["West"] == "RED"
+
+    app._move_vehicles_on_green.assert_not_called()
+
+
+def test_tick_starts_clearance_when_emergency_arrives():
+    """An emergency on the opposite axis triggers yellow clearance."""
+    app = make_dashboard()
+    app.engine.start()
+
+    app.signal_states = {
+        "North": "GREEN",
+        "South": "GREEN",
+        "East": "RED",
+        "West": "RED",
+    }
+
+    app._active_axis = "NS"
+    app.emergency_vehicles.add("emergency-1")
+    app.vehicle_queues["East"] = ["emergency-1"]
+
+    app.YELLOW_CLEARANCE_DURATION = 1.0
+    app.ALL_RED_CLEARANCE_DURATION = 1.0
+    app._transition_state = None
+    app._transition_elapsed = 0.0
+    app._pending_axis = None
+    app._emergency_override = False
+
+    with patch(
+        "ui.traffic_dashboard.time.monotonic",
+        return_value=10.1,
+    ):
+        app._tick()
+
+    assert app._transition_state == "YELLOW"
+
+    assert app.signal_states["North"] == "YELLOW"
+    assert app.signal_states["South"] == "YELLOW"
+    assert app.signal_states["East"] == "RED"
+    assert app.signal_states["West"] == "RED"
+
+    app._move_vehicles_on_green.assert_not_called()
+
