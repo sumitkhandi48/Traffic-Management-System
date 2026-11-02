@@ -12,6 +12,7 @@ class TrafficDashboard:
     """Display simulation controls, traffic signals, queues, and statistics."""
 
     APPROACHES = ("North", "South", "East", "West")
+    MAX_DISPLAYED_VEHICLES = 3
 
     # FR-07: Green-light duration limits, in seconds.
     MIN_GREEN_DURATION = 3.0
@@ -278,7 +279,7 @@ class TrafficDashboard:
             self.congestion_labels[approach] = congestion_label
             ttk.Label(
                 card,
-                text="Queue (oldest first):",
+                text="Queue (oldest first; first 3 shown):",
             ).pack(anchor=tk.W)
 
             vehicle_list = tk.Listbox(
@@ -728,8 +729,11 @@ class TrafficDashboard:
 
 
     def _refresh_display(self):
-        """Refresh signal indicators, queues, and traffic statistics."""
+        """Refresh traffic information using bounded UI rendering."""
         queue_lengths = {}
+
+        total_waiting_time = 0.0
+        waiting_vehicle_count = 0
 
         for approach in self.APPROACHES:
             state = self.signal_states[approach]
@@ -745,13 +749,24 @@ class TrafficDashboard:
             )
 
             vehicles = self.vehicle_queues[approach]
-            queue_lengths[approach] = len(vehicles)
-            waiting_time_total = sum(
-                self.vehicle_waiting_times[approach].get(vehicle, 0.0)
-                for vehicle in vehicles
-            )
+            queue_length = len(vehicles)
+            queue_lengths[approach] = queue_length
 
-            demand_score = len(vehicles) + 0.1 * waiting_time_total
+            # Calculate waiting-time aggregates in one traversal.
+            waiting_times = self.vehicle_waiting_times[approach]
+            approach_waiting_time = 0.0
+
+            for vehicle in vehicles:
+                waiting_time = waiting_times.get(vehicle, 0.0)
+
+                if waiting_time is not None:
+                    approach_waiting_time += waiting_time
+                    total_waiting_time += waiting_time
+                    waiting_vehicle_count += 1
+
+            demand_score = (
+                queue_length + 0.1 * approach_waiting_time
+            )
 
             self.demand_labels[approach].configure(
                 text=f"Traffic demand: {demand_score:.1f}"
@@ -759,7 +774,7 @@ class TrafficDashboard:
 
             is_congested = self.congestion_detector.detect(
                 demand_score,
-                len(vehicles),
+                queue_length,
             )
 
             self.congestion_labels[approach].configure(
@@ -770,21 +785,19 @@ class TrafficDashboard:
                 ),
                 foreground="#c62828" if is_congested else "#2e7d32",
             )
+
             self.queue_labels[approach].configure(
-                text=f"Waiting vehicles: {len(vehicles)}"
+                text=f"Waiting vehicles: {queue_length}"
             )
 
+            # Render only the oldest three vehicles.
+            # The complete queue remains unchanged.
             vehicle_list = self.vehicle_queues[approach + "_list"]
 
             vehicle_list.delete(0, tk.END)
 
-            for vehicle in vehicles:
-                waiting_time = (
-                    self.vehicle_waiting_times[approach].get(
-                        vehicle,
-                        0.0,
-                    )
-                )
+            for vehicle in vehicles[:self.MAX_DISPLAYED_VEHICLES]:
+                waiting_time = waiting_times.get(vehicle, 0.0)
 
                 marker = (
                     "[EMERGENCY]"
@@ -797,13 +810,12 @@ class TrafficDashboard:
                     f"{marker} {vehicle} | Wait: {waiting_time:.1f} s",
                 )
 
+        # Use the already-maintained emergency approach set.
+        # This avoids scanning every vehicle again.
         emergency_approaches = [
             approach
             for approach in self.APPROACHES
-            if any(
-                vehicle in self.emergency_vehicles
-                for vehicle in self.vehicle_queues[approach]
-            )
+            if approach in self.emergency_approaches
         ]
 
         if emergency_approaches:
@@ -831,18 +843,9 @@ class TrafficDashboard:
 
         max_queue = max(queue_lengths.values(), default=0)
 
-        all_waiting_times = [
-            waiting_time
-            for approach in self.APPROACHES
-            for waiting_time in self.vehicle_waiting_times[
-                approach
-            ].values()
-            if waiting_time is not None
-        ]
-
         average_wait = (
-            sum(all_waiting_times) / len(all_waiting_times)
-            if all_waiting_times
+            total_waiting_time / waiting_vehicle_count
+            if waiting_vehicle_count
             else 0.0
         )
 

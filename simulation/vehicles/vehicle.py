@@ -1,8 +1,9 @@
+"""Vehicle representation for the traffic simulation."""
 
 from dataclasses import dataclass
 
 
-@dataclass
+@dataclass(slots=True)
 class Vehicle:
     """Represent a vehicle participating in the traffic simulation."""
 

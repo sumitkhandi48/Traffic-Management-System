@@ -7,7 +7,7 @@ T = TypeVar("T")
 
 
 class LaneQueue(Generic[T]):
-    """Maintain vehicles in arrival order for a single lane."""
+    """Maintain vehicles in arrival order for a single traffic lane."""
 
     def __init__(self) -> None:
         """Initialize an empty lane queue."""
@@ -36,8 +36,8 @@ class LaneQueue(Generic[T]):
         return len(self._vehicles)
 
     def __iter__(self) -> Iterator[T]:
-        """Iterate over queued vehicles without removing them."""
-        return iter(tuple(self._vehicles))
+        """Iterate directly over queued vehicles without copying."""
+        return iter(self._vehicles)
 
     def is_empty(self) -> bool:
         """Return whether the lane queue contains no vehicles."""
