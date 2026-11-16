@@ -1,9 +1,8 @@
-
 """Track traffic statistics as the simulation progresses."""
 
 from math import isfinite
 from numbers import Real
-from typing import Iterable, Mapping
+from typing import Any, Iterable, Mapping
 
 from simulation.congestion import CongestionDetector
 from simulation.traffic.demand_monitor import DemandMeasurement
@@ -27,10 +26,65 @@ class TrafficStatistics:
         self._total_waiting_time = 0.0
         self._maximum_waiting_time = 0.0
         self._queue_length = 0
+        self._peak_queue_length_ever = 0
         self._congestion_events = 0
         self._congested_approaches: set[str] = set()
+        self._approach_processed_counts: dict[str, int] = {}
+        self._approach_volume_counts: dict[str, int] = {}
 
-    def record_processed(self, vehicle: Vehicle) -> None:
+    @property
+    def total_processed(self) -> int:
+        """Total number of vehicles that completed traversal through the intersection."""
+        return self._vehicles_processed
+
+    @property
+    def average_wait_all_time(self) -> float:
+        """Cumulative average waiting time across all completed vehicles."""
+        return (
+            self._total_waiting_time / self._vehicles_processed
+            if self._vehicles_processed
+            else 0.0
+        )
+
+    @property
+    def peak_queue_length_ever(self) -> int:
+        """Maximum simultaneous queue length observed across the entire run."""
+        return self._peak_queue_length_ever
+
+    @property
+    def congestion_event_count(self) -> int:
+        """Total number of congestion events detected across the entire run."""
+        return self._congestion_events
+
+    @property
+    def busiest_approach_overall(self) -> str:
+        """The approach with the highest cumulative vehicle volume, or 'None'."""
+        all_approaches = set(self._approach_processed_counts) | set(self._approach_volume_counts)
+        totals = {
+            app: self._approach_processed_counts.get(app, 0) + self._approach_volume_counts.get(app, 0)
+            for app in all_approaches
+        }
+        if not totals or max(totals.values(), default=0) == 0:
+            return "None"
+        return max(totals, key=totals.get)
+
+    def reset(self) -> None:
+        """Reset all statistics counters to zero."""
+        self._vehicles_processed = 0
+        self._total_waiting_time = 0.0
+        self._maximum_waiting_time = 0.0
+        self._queue_length = 0
+        self._peak_queue_length_ever = 0
+        self._congestion_events = 0
+        self._congested_approaches.clear()
+        self._approach_processed_counts.clear()
+        self._approach_volume_counts.clear()
+
+    def record_processed(
+        self,
+        vehicle: Vehicle,
+        approach: str | None = None,
+    ) -> None:
         """Record a vehicle that has completed processing."""
         if not isinstance(vehicle, Vehicle):
             raise TypeError("vehicle must be a Vehicle instance")
@@ -49,6 +103,13 @@ class TrafficStatistics:
             self._maximum_waiting_time,
             float(waiting_time),
         )
+
+        if approach is not None:
+            if not isinstance(approach, str) or not approach.strip():
+                raise ValueError("approach must be a non-empty string")
+            self._approach_processed_counts[approach] = (
+                self._approach_processed_counts.get(approach, 0) + 1
+            )
 
     def update(
         self,
@@ -77,6 +138,10 @@ class TrafficStatistics:
                     approach_queue_length += 1
 
             queue_length += approach_queue_length
+            self._approach_volume_counts[approach] = (
+                self._approach_volume_counts.get(approach, 0) + approach_queue_length
+            )
+
             measurement = demand_measurements.get(approach)
 
             if measurement is not None:
@@ -99,10 +164,11 @@ class TrafficStatistics:
         )
         self._congested_approaches = currently_congested
         self._queue_length = queue_length
+        self._peak_queue_length_ever = max(self._peak_queue_length_ever, queue_length)
 
         return self.get_statistics()
 
-    def get_statistics(self) -> dict[str, int | float]:
+    def get_statistics(self, include_cumulative: bool = False) -> dict[str, Any]:
         """Return the latest statistics snapshot."""
         average_waiting_time = (
             self._total_waiting_time / self._vehicles_processed
@@ -110,10 +176,25 @@ class TrafficStatistics:
             else 0.0
         )
 
-        return {
+        base_stats = {
             "vehicles_processed": self._vehicles_processed,
             "average_waiting_time": average_waiting_time,
             "maximum_waiting_time": self._maximum_waiting_time,
             "queue_length": self._queue_length,
             "congestion_events": self._congestion_events,
         }
+
+        if include_cumulative:
+            base_stats.update({
+                "total_processed": self.total_processed,
+                "average_wait_all_time": self.average_wait_all_time,
+                "peak_queue_length_ever": self.peak_queue_length_ever,
+                "congestion_event_count": self.congestion_event_count,
+                "busiest_approach_overall": self.busiest_approach_overall,
+            })
+
+        return base_stats
+
+    def get_cumulative_statistics(self) -> dict[str, Any]:
+        """Return the statistics snapshot including cumulative metrics."""
+        return self.get_statistics(include_cumulative=True)

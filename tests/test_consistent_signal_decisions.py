@@ -139,23 +139,44 @@ def test_identical_conditions_produce_identical_decisions(
     assert first_decision[0] == expected_axis
 
 
-def test_signal_decisions_are_repeatable_across_independent_runs():
-    """Repeated runs with identical initial conditions remain consistent."""
-
-    decisions = []
-
-    for _ in range(5):
-        app = make_dashboard(
-            active_axis="NS",
-            queues={
-                "North": ["N1", "N2"],
-                "East": ["E1"],
-            },
-        )
-
-        decisions.append(get_signal_decision(app))
-
-    assert all(
-        decision == decisions[0]
-        for decision in decisions
+def test_consistent_decision_favors_higher_north_south_queue():
+    """Higher North-South vehicle load consistently allocates green to NS with bounded duration."""
+    app = make_dashboard(
+        active_axis="EW",
+        queues={
+            "North": ["N1", "N2", "N3", "N4"],
+            "South": ["S1", "S2"],
+            "East": ["E1"],
+        },
     )
+
+    axis, signals, duration = get_signal_decision(app)
+
+    assert axis == "NS"
+    assert signals["North"] == "GREEN"
+    assert signals["South"] == "GREEN"
+    assert signals["East"] == "RED"
+    assert signals["West"] == "RED"
+    assert app.MIN_GREEN_DURATION <= duration <= app.MAX_GREEN_DURATION
+
+
+def test_consistent_decision_emergency_preemption_overrides_high_volume():
+    """Emergency vehicle on crossing axis consistently preempts high-volume normal traffic."""
+    app = make_dashboard(
+        active_axis="NS",
+        queues={
+            "North": ["N1", "N2", "N3", "N4", "N5"],
+            "South": ["S1", "S2", "S3"],
+            "East": ["E_EMERGENCY"],
+        },
+        emergency_vehicles={"E_EMERGENCY"},
+    )
+
+    axis, signals, duration = get_signal_decision(app)
+
+    assert axis == "EW"
+    assert signals["East"] == "GREEN"
+    assert signals["West"] == "GREEN"
+    assert signals["North"] == "RED"
+    assert signals["South"] == "RED"
+    assert duration >= app.MIN_GREEN_DURATION

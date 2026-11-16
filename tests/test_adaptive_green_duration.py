@@ -24,7 +24,7 @@ def make_dashboard():
         approach: "RED" for approach in app.APPROACHES
     }
     app._active_axis = "NS"
-    app._phase_duration = 5.0
+    app._phase_duration = 10.0
 
     return app
 
@@ -57,7 +57,7 @@ def test_maximum_duration_is_used_for_large_queue():
     """A large queue must not exceed the maximum allowed duration."""
     app = make_dashboard()
     app.vehicle_queues["North"] = [
-        f"N{i}" for i in range(20)
+        f"N{i}" for i in range(60)
     ]
 
     app._set_signal_phase("NS")
@@ -93,7 +93,38 @@ def test_demand_counts_both_approaches_on_axis():
 
     app._set_signal_phase("NS")
 
-    assert app._phase_duration == 7.0
+    assert app._phase_duration == 14.0
+
+
+def test_ut_13_dynamic_green_duration_proportional_to_demand():
+    """UT_13: Low demand (2 vehicles) vs High demand (10 vehicles) scales proportionally."""
+    app = make_dashboard()
+
+    app.vehicle_queues["North"] = ["N1", "N2"]
+    app._set_signal_phase("NS")
+    low_demand_duration = app._phase_duration
+
+    app.vehicle_queues["North"] = [f"N{i}" for i in range(10)]
+    app._set_signal_phase("NS")
+    high_demand_duration = app._phase_duration
+
+    assert low_demand_duration == 12.0
+    assert high_demand_duration == 20.0
+    assert high_demand_duration > low_demand_duration
+
+
+def test_ut_14_green_duration_strictly_respects_10s_min_and_60s_max():
+    """UT_14: Green-light duration never falls below 10 seconds or exceeds 60 seconds."""
+    assert MIN_GREEN_DURATION == 10.0
+    assert MAX_GREEN_DURATION == 60.0
+
+    app = make_dashboard()
+    app._set_signal_phase("NS")
+    assert app._phase_duration == 10.0
+
+    app.vehicle_queues["North"] = [f"N{i}" for i in range(200)]
+    app._set_signal_phase("NS")
+    assert app._phase_duration == 60.0
 
 
 def test_crossing_axis_remains_red():
