@@ -1,6 +1,7 @@
 """Tests for NFR-06: Memory and processing efficiency."""
 
 import sys
+import time
 from dataclasses import dataclass
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -11,6 +12,12 @@ from ui.traffic_dashboard import TrafficDashboard
 
 
 LOAD_SIZE = 10_000
+
+# Performance budget thresholds in seconds (NFR-06)
+MAX_QUEUE_LOAD_TIME_SEC = 0.100  # 100 ms for 10,000 enqueues + iteration
+MAX_QUEUE_FIFO_TIME_SEC = 0.100  # 100 ms for 10,000 enqueues + dequeues
+MAX_VEHICLE_LOAD_TIME_SEC = 0.150  # 150 ms for 10,000 Vehicle creations and dequeues
+MAX_DASHBOARD_REFRESH_TIME_SEC = 0.100  # 100 ms to render bounded view under 10k vehicles
 
 
 @dataclass
@@ -41,7 +48,8 @@ def test_vehicle_uses_slots_to_reduce_instance_overhead():
 
 
 def test_lane_queue_handles_large_vehicle_load():
-    """A lane queue must efficiently retain and iterate over 10,000 items."""
+    """A lane queue must efficiently retain and iterate over 10,000 items under performance budget."""
+    start_time = time.perf_counter()
     queue = LaneQueue[int]()
 
     for vehicle_id in range(LOAD_SIZE):
@@ -55,9 +63,13 @@ def test_lane_queue_handles_large_vehicle_load():
     assert queue.size() == LOAD_SIZE
     assert queue.peek() == 0
 
+    elapsed = time.perf_counter() - start_time
+    assert elapsed < MAX_QUEUE_LOAD_TIME_SEC
+
 
 def test_lane_queue_preserves_fifo_order_under_large_load():
-    """Large queue operations must preserve FIFO ordering."""
+    """Large queue operations must preserve FIFO ordering under performance budget."""
+    start_time = time.perf_counter()
     queue = LaneQueue[int]()
 
     for vehicle_id in range(LOAD_SIZE):
@@ -68,6 +80,31 @@ def test_lane_queue_preserves_fifo_order_under_large_load():
 
     assert queue.is_empty()
     assert queue.size() == 0
+
+    elapsed = time.perf_counter() - start_time
+    assert elapsed < MAX_QUEUE_FIFO_TIME_SEC
+
+
+def test_lane_queue_vehicle_operations_benchmark():
+    """10,000 domain Vehicle instances in LaneQueue operate within strict performance budget."""
+    start_time = time.perf_counter()
+    queue = LaneQueue[Vehicle]()
+
+    for i in range(LOAD_SIZE):
+        queue.enqueue(Vehicle(vehicle_id=i))
+
+    assert queue.size() == LOAD_SIZE
+    first_vehicle = queue.peek()
+    assert first_vehicle is not None
+    assert first_vehicle.vehicle_id == 0
+
+    for expected_id in range(LOAD_SIZE):
+        v = queue.dequeue()
+        assert v.vehicle_id == expected_id
+
+    assert queue.is_empty()
+    elapsed = time.perf_counter() - start_time
+    assert elapsed < MAX_VEHICLE_LOAD_TIME_SEC
 
 
 def make_dashboard_for_refresh_test(vehicle_count):
@@ -157,7 +194,10 @@ def test_dashboard_limits_rendering_for_large_queues():
 
     original_queue = list(app.vehicle_queues["North"])
 
+    start_time = time.perf_counter()
     app._refresh_display()
+    render_elapsed = time.perf_counter() - start_time
+    assert render_elapsed < MAX_DASHBOARD_REFRESH_TIME_SEC
 
     displayed_list = app.vehicle_lists["North"]
 

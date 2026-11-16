@@ -1,4 +1,3 @@
-
 """Measure traffic demand for individual approaches."""
 
 from dataclasses import dataclass
@@ -18,6 +17,8 @@ class DemandMeasurement:
     waiting_vehicle_count: int
     total_waiting_time: float
     demand_score: float
+    emergency_vehicle_count: int = 0
+    has_emergency: bool = False
 
 
 class DemandMonitor:
@@ -50,6 +51,7 @@ class DemandMonitor:
                 raise ValueError("approach names must be non-empty strings")
 
             vehicle_count = 0
+            emergency_count = 0
             total_waiting_time = 0.0
 
             for lane_queue in lane_queues:
@@ -66,6 +68,11 @@ class DemandMonitor:
 
                     vehicle_count += 1
                     total_waiting_time += vehicle.waiting_time
+                    if (
+                        getattr(vehicle, "is_emergency", False)
+                        or getattr(vehicle, "vehicle_type", "").lower() == "emergency"
+                    ):
+                        emergency_count += 1
 
             demand_score = (
                 vehicle_count
@@ -77,6 +84,8 @@ class DemandMonitor:
                 waiting_vehicle_count=vehicle_count,
                 total_waiting_time=total_waiting_time,
                 demand_score=demand_score,
+                emergency_vehicle_count=emergency_count,
+                has_emergency=emergency_count > 0,
             )
 
         return measurements
