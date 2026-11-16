@@ -289,7 +289,8 @@ class TrafficDashboard:
 
     @_active_axis.setter
     def _active_axis(self, value: str):
-        self.controller.phase_controller._active_axis = value
+        norm = self.controller.phase_controller.normalize_axis(value)
+        self.controller.phase_controller._active_axis = norm
 
     @property
     def _phase_duration(self) -> float:

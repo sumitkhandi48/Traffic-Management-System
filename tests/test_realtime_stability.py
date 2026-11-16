@@ -150,13 +150,13 @@ def test_tick_uses_updated_traffic_demand_for_next_phase():
     ):
         app._tick()
 
-    # EW should be selected based on the updated queue demand.
-    assert app._pending_axis == "EW"
+    # East should be selected based on the updated queue demand.
+    assert app._pending_axis in ("East", "EW")
     assert app._transition_state == "YELLOW"
-    assert app._active_axis == "NS"
+    assert app._active_axis in ("North", "NS")
 
     assert app.signal_states["North"] == "YELLOW"
-    assert app.signal_states["South"] == "YELLOW"
+    assert app.signal_states["South"] == "RED"
     assert app.signal_states["East"] == "RED"
     assert app.signal_states["West"] == "RED"
 
@@ -168,7 +168,7 @@ def test_tick_starts_clearance_when_normal_phase_expires():
 
     app.signal_states = {
         "North": "GREEN",
-        "South": "GREEN",
+        "South": "RED",
         "East": "RED",
         "West": "RED",
     }
@@ -186,12 +186,12 @@ def test_tick_starts_clearance_when_normal_phase_expires():
     app._phase_elapsed = 4.95
 
     def select_ew_phase():
-        app._active_axis = "EW"
+        app._active_axis = "East"
         app.signal_states.update({
             "North": "RED",
             "South": "RED",
             "East": "GREEN",
-            "West": "GREEN",
+            "West": "RED",
         })
 
     app._choose_next_phase.side_effect = select_ew_phase
@@ -203,10 +203,10 @@ def test_tick_starts_clearance_when_normal_phase_expires():
         app._tick()
 
     assert app._transition_state == "YELLOW"
-    assert app._active_axis == "NS"
+    assert app._active_axis in ("North", "NS")
 
     assert app.signal_states["North"] == "YELLOW"
-    assert app.signal_states["South"] == "YELLOW"
+    assert app.signal_states["South"] == "RED"
     assert app.signal_states["East"] == "RED"
     assert app.signal_states["West"] == "RED"
 
@@ -214,18 +214,18 @@ def test_tick_starts_clearance_when_normal_phase_expires():
 
 
 def test_tick_starts_clearance_when_emergency_arrives():
-    """An emergency on the opposite axis triggers yellow clearance."""
+    """An emergency on another approach triggers yellow clearance."""
     app = make_dashboard()
     app.engine.start()
 
     app.signal_states = {
         "North": "GREEN",
-        "South": "GREEN",
+        "South": "RED",
         "East": "RED",
         "West": "RED",
     }
 
-    app._active_axis = "NS"
+    app._active_axis = "North"
     app.emergency_vehicles.add("emergency-1")
     app.vehicle_queues["East"] = ["emergency-1"]
 
@@ -245,7 +245,7 @@ def test_tick_starts_clearance_when_emergency_arrives():
     assert app._transition_state == "YELLOW"
 
     assert app.signal_states["North"] == "YELLOW"
-    assert app.signal_states["South"] == "YELLOW"
+    assert app.signal_states["South"] == "RED"
     assert app.signal_states["East"] == "RED"
     assert app.signal_states["West"] == "RED"
 

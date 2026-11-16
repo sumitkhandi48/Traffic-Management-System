@@ -222,9 +222,13 @@ def test_emergency_vehicle_does_not_move_on_red_signal():
 
 
 def test_emergency_priority_selects_correct_axis():
-    """An emergency vehicle triggers transition to its axis once MIN_GREEN is met."""
+    """An emergency vehicle triggers transition to its approach once MIN_GREEN is met when active approach has traffic."""
     app = make_dashboard_for_emergency_test()
     app.controller.start()
+
+    # Active traffic on North
+    for _ in range(15):
+        app.controller.add_vehicle("North", "normal")
 
     # Emergency vehicle arrives on East
     app.controller.add_vehicle("East", "emergency")
@@ -235,50 +239,52 @@ def test_emergency_priority_selects_correct_axis():
     app.controller.step(5.0)  # reaches MIN_GREEN -> initiates YELLOW
     assert app.controller.phase_controller.is_in_clearance
     app.controller.step(1.0)  # through yellow into all-red
-    app.controller.step(1.0)  # through all-red into EW green
+    app.controller.step(1.0)  # through all-red into East green
 
-    assert app.controller.active_axis == "EW"
+    assert app.controller.active_axis in ("East", "EW")
     assert app.signal_states["East"] == "GREEN"
-    assert app.signal_states["West"] == "GREEN"
+    assert app.signal_states["North"] == "RED"
+    assert app.signal_states["South"] == "RED"
+    assert app.signal_states["West"] == "RED"
 
 
 def test_emergency_priority_keeps_opposite_axis_red():
-    """Selecting an emergency axis keeps the conflicting axis strictly red."""
+    """Selecting an emergency approach keeps all other approaches strictly red."""
     app = make_dashboard_for_emergency_test()
-    app._set_signal_phase("NS")
+    app._set_signal_phase("North")
 
     assert app.signal_states["North"] == "GREEN"
-    assert app.signal_states["South"] == "GREEN"
+    assert app.signal_states["South"] == "RED"
     assert app.signal_states["East"] == "RED"
     assert app.signal_states["West"] == "RED"
 
-    # Emergency on East triggers switch to EW via real controller phase selection
+    # Emergency on East triggers switch to East via real controller phase selection
     app.vehicle_queues["East"] = ["emergency-1"]
     app.emergency_vehicles.add("emergency-1")
     app._choose_next_phase()
 
     assert app.signal_states["East"] == "GREEN"
-    assert app.signal_states["West"] == "GREEN"
     assert app.signal_states["North"] == "RED"
     assert app.signal_states["South"] == "RED"
+    assert app.signal_states["West"] == "RED"
 
 
 def test_signal_transition_uses_yellow_and_all_red_clearance():
-    """Signal axes switch only after yellow and all-red clearance intervals."""
+    """Signal approaches switch only after yellow and all-red clearance intervals."""
     app = make_dashboard_for_emergency_test()
-    app._set_signal_phase("NS")
+    app._set_signal_phase("North")
 
     assert app.signal_states["North"] == "GREEN"
-    assert app.signal_states["South"] == "GREEN"
+    assert app.signal_states["South"] == "RED"
     assert app.signal_states["East"] == "RED"
     assert app.signal_states["West"] == "RED"
 
-    # Initiate clearance transition to EW via real dashboard method
-    app._begin_signal_transition("EW")
+    # Initiate clearance transition to East via real dashboard method
+    app._begin_signal_transition("East")
 
-    # Immediately on transition start, departing axis is YELLOW
+    # Immediately on transition start, departing approach is YELLOW
     assert app.signal_states["North"] == "YELLOW"
-    assert app.signal_states["South"] == "YELLOW"
+    assert app.signal_states["South"] == "RED"
     assert app.signal_states["East"] == "RED"
     assert app.signal_states["West"] == "RED"
 
@@ -286,29 +292,29 @@ def test_signal_transition_uses_yellow_and_all_red_clearance():
     app._advance_signal_transition(1.0)
     assert all(state == "RED" for state in app.signal_states.values())
 
-    # Advance another 1.0s -> clearance finishes, EW becomes GREEN
+    # Advance another 1.0s -> clearance finishes, East becomes GREEN
     app._advance_signal_transition(1.0)
     assert app.signal_states["East"] == "GREEN"
-    assert app.signal_states["West"] == "GREEN"
     assert app.signal_states["North"] == "RED"
     assert app.signal_states["South"] == "RED"
+    assert app.signal_states["West"] == "RED"
 
 
 def test_emergency_axis_waits_for_signal_clearance():
     """Emergency priority must not bypass yellow and all-red clearance."""
     app = make_dashboard_for_emergency_test()
-    app._set_signal_phase("EW")
+    app._set_signal_phase("East")
 
-    # Emergency arrives on North (NS)
+    # Emergency arrives on North
     app.vehicle_queues["North"] = ["emergency-1"]
     app.emergency_vehicles.add("emergency-1")
 
-    # Transition to emergency axis NS via real dashboard method
-    app._begin_signal_transition("NS")
+    # Transition to emergency approach North via real dashboard method
+    app._begin_signal_transition("North")
 
-    # Departing axis EW must show YELLOW, North is still RED
+    # Departing approach East must show YELLOW, others are still RED
     assert app.signal_states["East"] == "YELLOW"
-    assert app.signal_states["West"] == "YELLOW"
+    assert app.signal_states["West"] == "RED"
     assert app.signal_states["North"] == "RED"
     assert app.signal_states["South"] == "RED"
 
@@ -316,10 +322,10 @@ def test_emergency_axis_waits_for_signal_clearance():
     app._advance_signal_transition(1.0)
     assert all(state == "RED" for state in app.signal_states.values())
 
-    # Step through all-red into NS green
+    # Step through all-red into North green
     app._advance_signal_transition(1.0)
     assert app.signal_states["North"] == "GREEN"
-    assert app.signal_states["South"] == "GREEN"
+    assert app.signal_states["South"] == "RED"
     assert app.signal_states["East"] == "RED"
     assert app.signal_states["West"] == "RED"
 

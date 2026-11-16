@@ -30,17 +30,22 @@ class SignalPhaseController:
     - Supports queue clearance extensions up to ABSOLUTE_MAX_GREEN_DURATION.
     """
 
-    APPROACHES: tuple[str, ...] = ("North", "South", "East", "West")
-    AXIS_APPROACHES: dict[str, tuple[str, str]] = {
-        "NS": ("North", "South"),
-        "EW": ("East", "West"),
+    APPROACHES: tuple[str, ...] = ("North", "East", "South", "West")
+    CLOCKWISE_ORDER: tuple[str, ...] = ("North", "East", "South", "West")
+    AXIS_APPROACHES: dict[str, tuple[str, ...]] = {
+        "North": ("North",),
+        "East": ("East",),
+        "South": ("South",),
+        "West": ("West",),
+        "NS": ("North",),
+        "EW": ("East",),
     }
 
     DEFAULT_YELLOW_DURATION: float = 1.0
     DEFAULT_ALL_RED_DURATION: float = 1.0
     MIN_GREEN: float = 10.0
     MAX_GREEN: float = 60.0
-    GAP_OUT_TIME: float = 2.0
+    GAP_OUT_TIME: float = 1.0
     YELLOW_TIME: float = DEFAULT_YELLOW_DURATION
     ALL_RED_TIME: float = DEFAULT_ALL_RED_DURATION
     MIN_GREEN_DURATION: float = MIN_GREEN
@@ -67,7 +72,7 @@ class SignalPhaseController:
         self.absolute_max_green_duration = float(absolute_max_green_duration)
         self.gap_duration = float(gap_duration)
 
-        self._active_axis: str = "NS"
+        self._active_axis: str = "North"
         self._pending_axis: str | None = None
         self._transition_state: PhaseTransitionState = PhaseTransitionState.NONE
         self._transition_elapsed: float = 0.0
@@ -81,13 +86,14 @@ class SignalPhaseController:
 
     @property
     def active_axis(self) -> str:
-        """Currently active axis ('NS' or 'EW')."""
+        """Currently active axis or approach."""
         return self._active_axis
 
     @property
-    def active_approaches(self) -> tuple[str, str]:
-        """Approaches belonging to the active axis."""
-        return self.AXIS_APPROACHES[self._active_axis]
+    def active_approaches(self) -> tuple[str, ...]:
+        """Approaches belonging to the active phase (single approach)."""
+        norm = self.normalize_axis(self._active_axis)
+        return self.AXIS_APPROACHES.get(self._active_axis, (norm,))
 
     @property
     def pending_axis(self) -> str | None:
@@ -140,17 +146,40 @@ class SignalPhaseController:
             max(self.min_green_duration, float(duration)),
         )
 
-    @staticmethod
-    def other_axis(axis: str) -> str:
-        """Return the conflicting crossing axis."""
-        return "EW" if axis == "NS" else "NS"
+    @classmethod
+    def normalize_axis(cls, axis: str) -> str:
+        """Normalize axis or approach name to a single valid approach in CLOCKWISE_ORDER."""
+        if not isinstance(axis, str) or not axis.strip():
+            raise ValueError(f"Invalid axis: {axis}")
+        clean = axis.strip()
+        for app in cls.CLOCKWISE_ORDER:
+            if clean.lower() == app.lower():
+                return app
+        if clean.upper() == "NS":
+            return "North"
+        if clean.upper() == "EW":
+            return "East"
+        if clean in cls.AXIS_APPROACHES:
+            return cls.AXIS_APPROACHES[clean][0]
+        raise ValueError(f"Invalid axis: {axis}")
 
-    def start(self, initial_axis: str = "NS", duration: float | None = None) -> None:
+    @classmethod
+    def get_clockwise_next(cls, current: str) -> str:
+        """Return the next approach in clockwise order (North -> East -> South -> West -> North)."""
+        norm = cls.normalize_axis(current)
+        idx = cls.CLOCKWISE_ORDER.index(norm)
+        return cls.CLOCKWISE_ORDER[(idx + 1) % len(cls.CLOCKWISE_ORDER)]
+
+    @classmethod
+    def other_axis(cls, axis: str) -> str:
+        """Return the next approach in clockwise order."""
+        return cls.get_clockwise_next(axis)
+
+    def start(self, initial_axis: str = "North", duration: float | None = None) -> None:
         """Start signal operation with the specified axis green."""
-        if initial_axis not in self.AXIS_APPROACHES:
-            raise ValueError(f"Invalid axis: {initial_axis}")
+        norm_axis = self.normalize_axis(initial_axis)
 
-        self._active_axis = initial_axis
+        self._active_axis = norm_axis
         self._pending_axis = None
         self._transition_state = PhaseTransitionState.NONE
         self._transition_elapsed = 0.0
@@ -161,11 +190,11 @@ class SignalPhaseController:
             else self.default_green_duration
         )
 
-        self._apply_axis_green(initial_axis)
+        self._apply_axis_green(norm_axis)
 
     def reset(self) -> None:
         """Reset the controller to all RED stopped state."""
-        self._active_axis = "NS"
+        self._active_axis = "North"
         self._pending_axis = None
         self._transition_state = PhaseTransitionState.NONE
         self._transition_elapsed = 0.0
@@ -177,8 +206,9 @@ class SignalPhaseController:
             self._signal_states[approach] = SignalColor.RED.value
 
     def _apply_axis_green(self, axis: str) -> None:
-        """Set green only on the selected axis; conflicting axis is strictly red."""
-        green_approaches = self.AXIS_APPROACHES[axis]
+        """Set green only on the single selected approach; all other signals are strictly red."""
+        norm = self.normalize_axis(axis)
+        green_approaches = self.AXIS_APPROACHES.get(axis, (norm,))
         for approach in self.APPROACHES:
             self._signal_states[approach] = (
                 SignalColor.GREEN.value
@@ -196,8 +226,8 @@ class SignalPhaseController:
         Returns True if a transition is in progress or was initiated;
         False if target_axis is already active and steady.
         """
-        if target_axis not in self.AXIS_APPROACHES:
-            raise ValueError(f"Invalid axis: {target_axis}")
+        norm_target = self.normalize_axis(target_axis)
+        norm_active = self.normalize_axis(self._active_axis)
 
         clamped_duration = (
             self._clamp_green_duration(target_green_duration)
@@ -206,28 +236,29 @@ class SignalPhaseController:
         )
 
         # If already on the target axis and not clearing, just update duration if needed
-        if target_axis == self._active_axis and not self.is_in_clearance:
+        if norm_target == norm_active and not self.is_in_clearance:
             if target_green_duration is not None:
                 self._phase_duration = clamped_duration
             return False
 
         # If already in clearance, update the pending axis to transition to next
         if self.is_in_clearance:
-            self._pending_axis = target_axis
+            self._pending_axis = norm_target
             self._pending_phase_duration = clamped_duration
             return True
 
-        # Begin clearance transition: active axis turns YELLOW, cross axis stays RED
-        self._pending_axis = target_axis
+        # Begin clearance transition: active axis turns YELLOW, all other signals stay RED
+        self._pending_axis = norm_target
         self._pending_phase_duration = clamped_duration
         self._transition_state = PhaseTransitionState.YELLOW
         self._transition_elapsed = 0.0
 
-        for approach in self.AXIS_APPROACHES[self._active_axis]:
-            self._signal_states[approach] = SignalColor.YELLOW.value
-
-        for approach in self.AXIS_APPROACHES[target_axis]:
-            self._signal_states[approach] = SignalColor.RED.value
+        active_apps = self.AXIS_APPROACHES.get(self._active_axis, (norm_active,))
+        for approach in self.APPROACHES:
+            if approach in active_apps:
+                self._signal_states[approach] = SignalColor.YELLOW.value
+            else:
+                self._signal_states[approach] = SignalColor.RED.value
 
         return True
 
@@ -254,7 +285,7 @@ class SignalPhaseController:
             self._transition_elapsed += delta_time
             if self._transition_elapsed >= self.all_red_duration:
                 # Clearance complete! Safely activate the target axis
-                new_axis = self._pending_axis or self.other_axis(self._active_axis)
+                new_axis = self._pending_axis or self.get_clockwise_next(self._active_axis)
                 self._transition_state = PhaseTransitionState.NONE
                 self._transition_elapsed = 0.0
                 self._pending_axis = None

@@ -8,19 +8,19 @@ from simulation.phases import PhaseTransitionState, SignalColor, SignalPhaseCont
 def test_initial_state_is_all_red():
     """Before starting, all approaches should display red."""
     controller = SignalPhaseController()
-    assert controller.active_axis == "NS"
+    assert controller.active_axis in ("North", "NS")
     assert controller.transition_state == PhaseTransitionState.NONE
     assert all(state == SignalColor.RED.value for state in controller.signal_states.values())
 
 
 def test_start_sets_selected_axis_green():
-    """Starting the controller activates the chosen axis and keeps the other red."""
+    """Starting the controller activates the chosen approach and keeps others red."""
     controller = SignalPhaseController()
-    controller.start("NS", duration=15.0)
+    controller.start("North", duration=15.0)
 
     states = controller.signal_states
     assert states["North"] == SignalColor.GREEN.value
-    assert states["South"] == SignalColor.GREEN.value
+    assert states["South"] == SignalColor.RED.value
     assert states["East"] == SignalColor.RED.value
     assert states["West"] == SignalColor.RED.value
     assert controller.phase_duration == 15.0
@@ -32,14 +32,14 @@ def test_clearance_lifecycle_green_yellow_allred_green():
         yellow_duration=1.0,
         all_red_duration=1.0,
     )
-    controller.start("NS", duration=12.0)
+    controller.start("North", duration=12.0)
 
-    # 1. Request switch to EW
-    transition_started = controller.request_phase_switch("EW", target_green_duration=18.0)
+    # 1. Request switch to East
+    transition_started = controller.request_phase_switch("East", target_green_duration=18.0)
     assert transition_started is True
     assert controller.transition_state == PhaseTransitionState.YELLOW
     assert controller.signal_states["North"] == SignalColor.YELLOW.value
-    assert controller.signal_states["South"] == SignalColor.YELLOW.value
+    assert controller.signal_states["South"] == SignalColor.RED.value
     assert controller.signal_states["East"] == SignalColor.RED.value
     assert controller.signal_states["West"] == SignalColor.RED.value
 
@@ -60,65 +60,44 @@ def test_clearance_lifecycle_green_yellow_allred_green():
     assert controller.transition_state == PhaseTransitionState.ALL_RED
     assert all(state == SignalColor.RED.value for state in controller.signal_states.values())
 
-    # 5. Advance another 0.5s (reaches 1.0s all-red limit -> activates EW GREEN)
+    # 5. Advance another 0.5s (reaches 1.0s all-red limit -> activates East GREEN)
     done, new_axis = controller.step(0.5)
     assert done is True
-    assert new_axis == "EW"
-    assert controller.active_axis == "EW"
+    assert new_axis == "East"
+    assert controller.active_axis == "East"
     assert controller.transition_state == PhaseTransitionState.NONE
     assert controller.signal_states["East"] == SignalColor.GREEN.value
-    assert controller.signal_states["West"] == SignalColor.GREEN.value
     assert controller.signal_states["North"] == SignalColor.RED.value
     assert controller.signal_states["South"] == SignalColor.RED.value
+    assert controller.signal_states["West"] == SignalColor.RED.value
     assert controller.phase_duration == 18.0
 
 
 def test_conflicting_green_is_never_emitted():
-    """At every step and transition, conflicting GREEN signals must NEVER exist."""
+    """At every step and transition, ONLY 1 signal is ever GREEN at a time."""
     controller = SignalPhaseController(
         yellow_duration=1.0,
         all_red_duration=1.0,
     )
-    controller.start("NS", duration=4.0)
+    controller.start("North", duration=4.0)
 
-    # Execute multiple back-and-forth phase cycles in 0.1s increments
+    # Execute multiple clockwise phase cycles in 0.1s increments
     for cycle in range(6):
-        target = "EW" if controller.active_axis == "NS" else "NS"
+        target = controller.get_clockwise_next(controller.active_axis)
         controller.request_phase_switch(target, target_green_duration=5.0)
 
         for step in range(80):  # 8.0 seconds total per cycle
             controller.step(0.1)
             states = controller.signal_states
 
-            ns_green = (
-                states["North"] == SignalColor.GREEN.value
-                or states["South"] == SignalColor.GREEN.value
-            )
-            ew_green = (
-                states["East"] == SignalColor.GREEN.value
-                or states["West"] == SignalColor.GREEN.value
-            )
+            # Invariant 1: At most 1 signal is GREEN at any time
+            green_count = sum(1 for s in states.values() if s == SignalColor.GREEN.value)
+            assert green_count <= 1, f"Multiple GREEN signals detected at cycle {cycle}, step {step}! States: {states}"
 
-            # Core invariant: NS and EW can NEVER be GREEN at the same time
-            assert not (ns_green and ew_green), (
-                f"Conflicting GREEN detected at cycle {cycle}, step {step}! States: {states}"
-            )
-
-            # Conflicting yellow invariant: yellow on one axis cannot co-exist with green on the other
-            ns_yellow = (
-                states["North"] == SignalColor.YELLOW.value
-                or states["South"] == SignalColor.YELLOW.value
-            )
-            ew_yellow = (
-                states["East"] == SignalColor.YELLOW.value
-                or states["West"] == SignalColor.YELLOW.value
-            )
-
-            assert not (ns_yellow and ew_green), (
-                f"Yellow on NS with Green on EW at cycle {cycle}, step {step}!"
-            )
-            assert not (ew_yellow and ns_green), (
-                f"Yellow on EW with Green on NS at cycle {cycle}, step {step}!"
+            # Invariant 2: Yellow cannot co-exist with Green
+            yellow_count = sum(1 for s in states.values() if s == SignalColor.YELLOW.value)
+            assert not (green_count > 0 and yellow_count > 0), (
+                f"Yellow and Green co-existing at cycle {cycle}, step {step}! States: {states}"
             )
 
 

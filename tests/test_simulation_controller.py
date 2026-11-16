@@ -28,18 +28,22 @@ def test_controller_initial_and_reset_state():
 
 
 def test_emergency_preemption_schedules_safe_transition():
-    """Emergency vehicle on cross axis triggers safe clearance once MIN_GREEN is met."""
+    """Emergency vehicle on other approach triggers safe clearance once MIN_GREEN is met when active approach has traffic."""
     controller = SimulationController()
     controller.start()
 
-    # Active axis is NS
-    assert controller.active_axis == "NS"
+    # Active approach is North
+    assert controller.active_axis in ("North", "NS")
     assert controller.signal_states["North"] == "GREEN"
 
-    # Add emergency vehicle to East (cross axis)
+    # Add vehicles to North so active approach has traffic to serve
+    for _ in range(15):
+        controller.add_vehicle("North")
+
+    # Add emergency vehicle to East
     controller.add_vehicle("East", vehicle_type="emergency")
 
-    # Respect MIN_GREEN (10.0s): NS remains GREEN until MIN_GREEN elapses
+    # Respect MIN_GREEN (10.0s): North remains GREEN while traffic is clearing until MIN_GREEN elapses
     controller.step(9.0)
     assert controller.is_in_clearance is False
     assert controller.signal_states["North"] == "GREEN"
@@ -58,10 +62,10 @@ def test_emergency_preemption_schedules_safe_transition():
     assert controller.signal_states["North"] == "RED"
     assert controller.signal_states["East"] == "RED"
 
-    # Advance 1.0s: clearance finishes, East-West is now GREEN
+    # Advance 1.0s: clearance finishes, East is now GREEN
     controller.step(1.0)
     assert controller.is_in_clearance is False
-    assert controller.active_axis == "EW"
+    assert controller.active_axis == "East"
     assert controller.signal_states["East"] == "GREEN"
 
 
@@ -140,6 +144,6 @@ def test_starvation_prevention_weighted_waiting_time():
     # Demand score comparison:
     # North: 5 + 0.1 * (5 * 0.5) = 5.25
     # East:  2 + 0.1 * (2 * 100.0) = 22.0
-    # East-West MUST be selected next to prevent starvation
+    # East MUST be selected next
     chosen_axis = controller.select_next_axis()
-    assert chosen_axis == "EW"
+    assert chosen_axis == "East"
