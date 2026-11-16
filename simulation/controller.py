@@ -23,7 +23,7 @@ from simulation.vehicles.vehicle import Vehicle
 class SimulationController:
     """Coordinating controller that orchestrates all domain models."""
 
-    APPROACHES: tuple[str, ...] = ("North", "South", "East", "West")
+    APPROACHES: tuple[str, ...] = ("North", "East", "South", "West")
     MIN_GREEN: float = SignalPhaseController.MIN_GREEN
     MAX_GREEN: float = SignalPhaseController.MAX_GREEN
     GAP_OUT_TIME: float = SignalPhaseController.GAP_OUT_TIME
@@ -190,27 +190,18 @@ class SimulationController:
         self._active_queue_empty_elapsed = 0.0
 
         if initial_axis is not None:
-            chosen_axis = initial_axis
+            chosen_axis = self.phase_controller.normalize_axis(initial_axis)
         else:
             emergency_axis = self._find_emergency_axis()
             if emergency_axis is not None:
                 chosen_axis = emergency_axis
             else:
-                measurements = self.demand_monitor.measure(self._lane_mapping)
-                ns_score = (
-                    measurements["North"].demand_score
-                    + measurements["South"].demand_score
-                )
-                ew_score = (
-                    measurements["East"].demand_score
-                    + measurements["West"].demand_score
-                )
-                if ns_score > ew_score:
-                    chosen_axis = "NS"
-                elif ew_score > ns_score:
-                    chosen_axis = "EW"
+                counts = {app: self.get_approach_queue_length(app) for app in self.APPROACHES}
+                max_app = max(self.APPROACHES, key=lambda app: counts[app])
+                if counts[max_app] > counts["North"]:
+                    chosen_axis = max_app
                 else:
-                    chosen_axis = "NS"
+                    chosen_axis = "North"
 
         duration = self.calculate_phase_duration(chosen_axis)
         self.phase_controller.start(chosen_axis, duration=duration)
@@ -278,10 +269,14 @@ class SimulationController:
                 for app in self.APPROACHES:
                     for q in self._lane_queues[app]:
                         if vehicle in q:
-                            emerg_axis = "NS" if app in ("North", "South") else "EW"
+                            emerg_axis = app
+                            active_has_vehicles = any(
+                                not q_act.is_empty()
+                                for q_act in self._lane_queues[self.phase_controller.active_axis]
+                            )
                             if (
                                 emerg_axis != self.phase_controller.active_axis
-                                and self.phase_controller.has_met_min_green
+                                and (not active_has_vehicles or self.phase_controller.has_met_min_green)
                             ):
                                 duration = self.calculate_phase_duration(emerg_axis)
                                 self.phase_controller.request_phase_switch(
@@ -343,12 +338,14 @@ class SimulationController:
         self.statistics.update(self._lane_mapping, measurements)
 
         if emergency_flag and self.engine.state == SimulationState.RUNNING:
-            emergency_axis = (
-                "NS" if selected_approach in ("North", "South") else "EW"
+            emergency_axis = selected_approach
+            active_has_vehicles = any(
+                not q_act.is_empty()
+                for q_act in self._lane_queues[self.phase_controller.active_axis]
             )
             if (
                 emergency_axis != self.phase_controller.active_axis
-                and self.phase_controller.has_met_min_green
+                and (not active_has_vehicles or self.phase_controller.has_met_min_green)
             ):
                 duration = self.calculate_phase_duration(emergency_axis)
                 self.phase_controller.request_phase_switch(
@@ -359,7 +356,7 @@ class SimulationController:
         return vehicle
 
     def _find_emergency_axis(self) -> str | None:
-        """Return the axis of the oldest waiting emergency vehicle, if any."""
+        """Return the approach of the oldest waiting emergency vehicle, if any."""
         oldest_emergency_vehicle: Vehicle | None = None
         emergency_approach: str | None = None
 
@@ -378,9 +375,7 @@ class SimulationController:
                             oldest_emergency_vehicle = vehicle
                             emergency_approach = approach
 
-        if emergency_approach is not None:
-            return "NS" if emergency_approach in ("North", "South") else "EW"
-        return None
+        return emergency_approach
 
     def is_emergency_active(self) -> bool:
         """True if an emergency vehicle is waiting in any approach queue."""
@@ -412,9 +407,10 @@ class SimulationController:
     def calculate_phase_duration(self, axis: str) -> float:
         """Compute green light duration (min 10.0s, max 60.0s) from measured demand."""
         measurements = self.demand_monitor.measure(self._lane_mapping)
-        axis_approaches = self.phase_controller.AXIS_APPROACHES[axis]
+        norm_axis = self.phase_controller.normalize_axis(axis)
+        axis_approaches = self.phase_controller.AXIS_APPROACHES.get(axis, (norm_axis,))
         axis_demand = sum(
-            measurements[app].demand_score for app in axis_approaches
+            measurements[app].demand_score for app in axis_approaches if app in measurements
         )
         return min(
             self.phase_controller.max_green_duration,
@@ -425,29 +421,37 @@ class SimulationController:
         )
 
     def select_next_axis(self) -> str:
-        """Determine next signal axis using emergency priority and weighted demand."""
+        """Determine next signal approach using emergency priority, clockwise default, and vehicle counts.
+
+        Rules:
+        1. Emergency priority: If any approach has an emergency vehicle waiting, select that approach.
+        2. Candidate approaches: The other 3 directions, ordered clockwise starting from default next.
+        3. Default next direction: The next clockwise direction from the currently active approach.
+        4. If another direction has strictly MORE vehicles than the default clockwise direction,
+           select the direction with the most vehicles (earliest in clockwise order if tied).
+        5. Otherwise, select the default clockwise direction.
+        """
         emergency_axis = self._find_emergency_axis()
         if emergency_axis is not None:
             return emergency_axis
 
-        measurements = self.demand_monitor.measure(self._lane_mapping)
-        ns_score = (
-            measurements["North"].demand_score
-            + measurements["South"].demand_score
-        )
-        ew_score = (
-            measurements["East"].demand_score
-            + measurements["West"].demand_score
-        )
+        current = self.phase_controller.normalize_axis(self.phase_controller.active_axis)
+        clockwise = SignalPhaseController.CLOCKWISE_ORDER  # ("North", "East", "South", "West")
+        idx = clockwise.index(current)
 
-        if ns_score > ew_score:
-            return "NS"
-        elif ew_score > ns_score:
-            return "EW"
-        else:
-            return self.phase_controller.other_axis(
-                self.phase_controller.active_axis
-            )
+        # Candidates in clockwise order starting from default_next
+        candidates = [clockwise[(idx + i) % len(clockwise)] for i in range(1, len(clockwise))]
+        default_next = candidates[0]
+
+        counts = {app: self.get_approach_queue_length(app) for app in candidates}
+        default_count = counts[default_next]
+
+        max_candidate = max(candidates, key=lambda app: counts[app])
+        max_count = counts[max_candidate]
+
+        if max_count > default_count:
+            return max_candidate
+        return default_next
 
     def step(self, delta_time: float) -> None:
         """Advance deterministic simulation time and process traffic movements."""
@@ -480,14 +484,18 @@ class SimulationController:
             self._movement_elapsed = 0.0
 
         # 4. Emergency preemption check (Vehicle-Actuated Control):
-        # Scan RED (non-active) axes for emergency vehicles across both lanes.
+        # Scan non-active approaches for emergency vehicles.
         emergency_axis = self._find_emergency_axis()
         if (
             emergency_axis is not None
             and emergency_axis != self.phase_controller.active_axis
-            and self.phase_controller.has_met_min_green
         ):
-            if (
+            active_has_vehicles = any(
+                not q.is_empty()
+                for q in self._lane_queues[self.phase_controller.active_axis]
+            )
+            should_preempt = not active_has_vehicles or self.phase_controller.has_met_min_green
+            if should_preempt and (
                 not self.phase_controller.is_in_clearance
                 or self.phase_controller.pending_axis != emergency_axis
             ):
@@ -523,6 +531,11 @@ class SimulationController:
                 any(not q.is_empty() for q in self._lane_queues[app])
                 for app in self.phase_controller.active_approaches
             )
+            other_has_vehicles = any(
+                self.get_approach_queue_length(app) > 0
+                for app in self.APPROACHES
+                if app not in self.phase_controller.active_approaches
+            )
             max_green_limit = min(
                 self.phase_controller.max_green_duration,
                 self.phase_controller.absolute_max_green_duration,
@@ -547,22 +560,18 @@ class SimulationController:
                     target_green_duration=extended_duration,
                 )
                 if self.phase_controller.phase_elapsed >= max_green_limit:
-                    other = self.phase_controller.other_axis(
-                        self.phase_controller.active_axis
-                    )
-                    target_duration = self.calculate_phase_duration(other)
+                    next_axis = self.select_next_axis()
+                    target_duration = self.calculate_phase_duration(next_axis)
                     self.phase_controller.request_phase_switch(
-                        other,
+                        next_axis,
                         target_green_duration=target_duration,
                     )
             elif had_vehicles_at_start or vehicle_dispatched_this_step:
                 # Vehicle crossed or queue just emptied during this step: reset gap timer to 0
                 self._active_queue_empty_elapsed = 0.0
                 if (
-                    self.phase_controller.has_met_min_green
-                    and self.phase_controller.phase_elapsed
-                    >= self.phase_controller.phase_duration
-                    and self.phase_controller.gap_duration <= 0.0
+                    self.phase_controller.gap_duration <= 0.0
+                    and (other_has_vehicles or self.phase_controller.has_met_min_green)
                 ):
                     next_axis = self.select_next_axis()
                     target_duration = self.calculate_phase_duration(next_axis)
@@ -571,14 +580,17 @@ class SimulationController:
                         target_green_duration=target_duration,
                     )
             else:
-                # All lanes of active approaches were empty for this entire step: accumulate gap time
+                # All lanes of active approach were empty for this entire step: accumulate gap time
                 self._active_queue_empty_elapsed += delta_time
                 gap_out_ready = (
                     self._active_queue_empty_elapsed
                     >= self.phase_controller.gap_duration
                     or self.phase_controller.phase_elapsed >= max_green_limit
                 )
-                if self.phase_controller.has_met_min_green and gap_out_ready:
+                # Fast switching when empty:
+                # When there are no vehicles in the green direction and vehicles are waiting in other directions:
+                # Switch in around 1 second (gap_duration) without waiting for min_green!
+                if gap_out_ready and (other_has_vehicles or self.phase_controller.has_met_min_green):
                     next_axis = self.select_next_axis()
                     target_duration = self.calculate_phase_duration(next_axis)
                     self.phase_controller.request_phase_switch(

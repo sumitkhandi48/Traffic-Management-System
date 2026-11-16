@@ -55,60 +55,60 @@ def get_signal_decision(app):
         "expected_axis",
     ),
     [
-        # Higher North/South demand.
+        # Higher North demand from West -> North.
         (
-            "NS",
+            "West",
             {"North": ["N1", "N2", "N3"], "East": ["E1"]},
             set(),
-            "NS",
+            "North",
         ),
 
-        # Higher East/West demand.
+        # Higher East demand from North -> East.
         (
-            "NS",
+            "North",
             {"North": ["N1"], "East": ["E1", "E2", "E3"]},
             set(),
-            "EW",
+            "East",
         ),
 
-        # Equal demand with North/South currently active.
+        # Equal demand with North currently active -> Clockwise to East.
         (
-            "NS",
-            {"North": ["N1"], "East": ["E1"]},
+            "North",
+            {"East": ["E1"], "South": ["S1"]},
             set(),
-            "EW",
+            "East",
         ),
 
-        # Equal demand with East/West currently active.
+        # Equal demand with East currently active -> Clockwise to South.
         (
-            "EW",
-            {"North": ["N1"], "East": ["E1"]},
+            "East",
+            {"South": ["S1"], "West": ["W1"]},
             set(),
-            "NS",
+            "South",
         ),
 
         # Emergency vehicle receives priority over normal demand.
         (
-            "NS",
+            "East",
             {"North": ["N1"], "East": ["E1", "E2", "E3"]},
             {"N1"},
-            "NS",
+            "North",
         ),
 
-        # Emergency vehicle on East/West receives priority.
+        # Emergency vehicle on West receives priority.
         (
-            "NS",
+            "North",
             {"North": ["N1", "N2", "N3"], "West": ["W1"]},
             {"W1"},
-            "EW",
+            "West",
         ),
 
-        # Empty queues use the configured alternating fallback.
+        # Empty queues use clockwise fallback from North -> East.
         (
-            "NS",
+            "North",
             {},
             set(),
-            "EW",
+            "East",
         ),
     ],
 )
@@ -140,9 +140,9 @@ def test_identical_conditions_produce_identical_decisions(
 
 
 def test_consistent_decision_favors_higher_north_south_queue():
-    """Higher North-South vehicle load consistently allocates green to NS with bounded duration."""
+    """Higher vehicle load consistently allocates green to highest approach with bounded duration."""
     app = make_dashboard(
-        active_axis="EW",
+        active_axis="West",
         queues={
             "North": ["N1", "N2", "N3", "N4"],
             "South": ["S1", "S2"],
@@ -152,18 +152,18 @@ def test_consistent_decision_favors_higher_north_south_queue():
 
     axis, signals, duration = get_signal_decision(app)
 
-    assert axis == "NS"
+    assert axis == "North"
     assert signals["North"] == "GREEN"
-    assert signals["South"] == "GREEN"
+    assert signals["South"] == "RED"
     assert signals["East"] == "RED"
     assert signals["West"] == "RED"
     assert app.MIN_GREEN_DURATION <= duration <= app.MAX_GREEN_DURATION
 
 
 def test_consistent_decision_emergency_preemption_overrides_high_volume():
-    """Emergency vehicle on crossing axis consistently preempts high-volume normal traffic."""
+    """Emergency vehicle consistently preempts high-volume normal traffic."""
     app = make_dashboard(
-        active_axis="NS",
+        active_axis="North",
         queues={
             "North": ["N1", "N2", "N3", "N4", "N5"],
             "South": ["S1", "S2", "S3"],
@@ -174,9 +174,9 @@ def test_consistent_decision_emergency_preemption_overrides_high_volume():
 
     axis, signals, duration = get_signal_decision(app)
 
-    assert axis == "EW"
+    assert axis == "East"
     assert signals["East"] == "GREEN"
-    assert signals["West"] == "GREEN"
     assert signals["North"] == "RED"
     assert signals["South"] == "RED"
+    assert signals["West"] == "RED"
     assert duration >= app.MIN_GREEN_DURATION

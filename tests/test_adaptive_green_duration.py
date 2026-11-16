@@ -86,14 +86,14 @@ def test_duration_always_stays_within_limits(vehicle_count):
 
 
 def test_demand_counts_both_approaches_on_axis():
-    """Demand from both approaches contributes to green duration."""
+    """Active approach demand contributes to green duration."""
     app = make_dashboard()
     app.vehicle_queues["North"] = ["N1", "N2"]
     app.vehicle_queues["South"] = ["S1", "S2"]
 
-    app._set_signal_phase("NS")
+    app._set_signal_phase("North")
 
-    assert app._phase_duration == 14.0
+    assert app._phase_duration == 12.0
 
 
 def test_ut_13_dynamic_green_duration_proportional_to_demand():
@@ -128,12 +128,12 @@ def test_ut_14_green_duration_strictly_respects_10s_min_and_60s_max():
 
 
 def test_crossing_axis_remains_red():
-    """The crossing axis must remain red when an axis is green."""
+    """Only 1 approach is green at a time; all other approaches must remain red."""
     app = make_dashboard()
 
-    app._set_signal_phase("NS")
+    app._set_signal_phase("North")
 
     assert app.signal_states["North"] == "GREEN"
-    assert app.signal_states["South"] == "GREEN"
+    assert app.signal_states["South"] == "RED"
     assert app.signal_states["East"] == "RED"
     assert app.signal_states["West"] == "RED"
