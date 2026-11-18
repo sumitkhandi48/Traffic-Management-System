@@ -13,3 +13,7 @@ venv/
 
 # SQLite database
 *.db
+
+.coverage
+.coverage.*
+htmlcov/
