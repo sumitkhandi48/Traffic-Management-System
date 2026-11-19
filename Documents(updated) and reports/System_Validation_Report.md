@@ -1,17 +1,5 @@
 # System Validation and Verification Report (SVR)
-## Traffic Management System (TMS) — ISO/IEC/IEEE 29119-3 Standard Format
-
-**Course**: Software Engineering (`UE23CS341A`) — Section 5K  
-**Institution**: Department of Computer Science & Engineering  
-**Student Author**: Sumit Ravi Khandi (`PES1UG24CS633`)  
-**Specification Version**: 2.0 (Final System Release)  
-**Date of Validation**: 2026-11-18  
-**Document Classification**: Academic System Verification & Acceptance  
-**Standards Conformance**: IEEE Std 829-2008, IEEE Std 1012-2016, ISO/IEC/IEEE 29119  
-
----
-
-## 1. Executive Summary
+## 1. Summary
 
 This **System Validation and Verification Report (SVR)** delivers the formal end-to-end acceptance testing results for the integrated **Traffic Management System (TMS)**. System validation establishes empirical evidence that the integrated software satisfies all specified functional requirements (**FR-01 through FR-15**), measurable non-functional performance baselines (**NFR-01 through NFR-08**), and critical security controls (**SR-1 through SR-7**), operating reliably across standard, peak, and emergency intersection traffic patterns.
 
@@ -179,6 +167,3 @@ The comprehensive validation testing described above confirms that the Traffic M
 
 **System Quality Gate Verdict**: **ACCEPTANCE CRITERIA MET — READY FOR FINAL PRODUCTION SUBMISSION**
 
-**Author & Test Lead**: Sumit Ravi Khandi (`PES1UG24CS633`)  
-**Course Evaluator**: Faculty Review Board, Department of CSE  
-**Date**: 2026-11-18
